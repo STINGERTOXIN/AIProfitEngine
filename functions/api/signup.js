@@ -25,10 +25,24 @@ export async function onRequestPost({request,env}) {
       from:'AI Profit Engine <welcome@aiprofitengine.ai>',
       to:[email],
       subject:'Welcome to AI Profit Engine',
-      text:"Thanks for joining the AI Profit Engine early-access list!\\n\\nYou're on the list. We're developing practical tools to help small businesses manage inquiries and follow up faster. We'll share updates as the project develops.\\n\\nYou can learn more at https://aiprofitengine.ai\\n\\nAI Profit Engine\\nAutomate. Earn. Repeat."
+      text:"Thanks for joining the AI Profit Engine early-access list!\n\nYou're on the list. We're developing practical tools to help small businesses manage inquiries and follow up faster. We'll share updates as the project develops.\n\nYou can learn more at https://aiprofitengine.ai\n\nAI Profit Engine\nAutomate. Earn. Repeat."
      })
     });
     if (!sent.ok) console.error('Resend welcome email failed:',sent.status);
+    // Notify the site owner only after a new subscriber has been stored.
+    try {
+     const notice=await fetch('https://api.resend.com/emails',{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json'},
+      body:JSON.stringify({
+       from:'AI Profit Engine <welcome@aiprofitengine.ai>',
+       to:['staffnebrian@gmail.com'],
+       subject:'New AI Profit Engine early-access subscriber',
+       text:`A new subscriber joined the AI Profit Engine early-access list.\n\nEmail: ${email}\nDate: ${new Date().toISOString()}\n\nView subscribers in your Cloudflare D1 dashboard.`
+      })
+     });
+     if (!notice.ok) console.error('Resend owner notification failed:',notice.status);
+    } catch(error) { console.error('Resend owner notification request failed:',String(error)); }
    } catch (error) { console.error('Resend welcome email request failed:',String(error)); }
   }
   return reply({ok:true});
