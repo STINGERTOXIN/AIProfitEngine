@@ -53,18 +53,20 @@ export async function onRequestGet({request, env}) {
   try {
     if (!await authorized(request, env))
       return reply({error:'Administrator authentication required.'}, 403);
-    const [totals, recent] = await Promise.all([
+    const [totals, recent, applications] = await Promise.all([
       env.DB.prepare(`SELECT COUNT(*) AS total,
         SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS last7,
         SUM(CASE WHEN created_at >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS last30
         FROM subscribers`).first(),
-      env.DB.prepare('SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC, id DESC LIMIT 100').all()
+      env.DB.prepare('SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC, id DESC LIMIT 100').all(),
+      env.DB.prepare('SELECT id, business_name, contact_email, plan, status, created_at FROM ape_businesses ORDER BY id DESC LIMIT 100').all()
     ]);
     return reply({
       total: Number(totals?.total || 0),
       last7: Number(totals?.last7 || 0),
       last30: Number(totals?.last30 || 0),
-      recent: (recent.results || []).map(({email, status, created_at}) => ({email, status, created_at}))
+      recent: (recent.results || []).map(({email, status, created_at}) => ({email, status, created_at})),
+      applications: (applications.results || []).map(({id, business_name, contact_email, plan, status, created_at}) => ({id, business_name, contact_email, plan, status, created_at}))
     });
   } catch (error) {
     console.error('Private subscriber API failed:', String(error));
