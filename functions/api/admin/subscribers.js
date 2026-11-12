@@ -73,3 +73,31 @@ export async function onRequestGet({request, env}) {
     return reply({error:'Subscriber administration temporarily unavailable.'}, 503);
   }
 }
+
+export async function onRequestPost({request, env}) {
+  if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true' || !env.DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
+    return reply({error:'Administrator controls are not configured.'}, 503);
+  try {
+    if (!await authorized(request, env)) return reply({error:'Administrator authentication required.'}, 403);
+    if (!String(request.headers.get('content-type') || '').toLowerCase().startsWith('application/json'))
+      return reply({error:'JSON request required.'}, 415);
+    const origin = request.headers.get('Origin');
+    if (!origin || origin !== new URL(request.url).origin)
+      return reply({error:'Request origin rejected.'}, 403);
+    const raw = await request.text();
+    if (raw.length > 2048) return reply({error:'Request too large.'}, 413);
+    const body = JSON.parse(raw);
+    const id = body?.id;
+    const status = body?.status;
+    if (!Number.isSafeInteger(id) || id <= 0 || !['approved','rejected'].includes(status))
+      return reply({error:'Invalid application or status.'}, 400);
+    const result = await env.DB.prepare(
+      "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
+    ).bind(status, id).run();
+    if (result.meta?.changes !== 1) return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
+    return reply({ok:true,id,status});
+  } catch (error) {
+    console.error('Application status update failed:', String(error));
+    return reply({error:'Unable to update application.'}, 503);
+  }
+}
