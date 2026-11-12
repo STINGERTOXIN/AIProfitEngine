@@ -95,7 +95,43 @@ export async function onRequestPost({request, env}) {
       "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
     ).bind(status, id).run();
     if (result.meta?.changes !== 1) return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
-    return reply({ok:true,id,status});
+    // Send a transactional decision notice only after the database update succeeds.
+    // Email delivery requires a verified Resend sender configured as RESEND_FROM_EMAIL.
+    let email = {sent:false, reason:'Email notification is not configured.'};
+    const sender = String(env.RESEND_FROM_EMAIL || '').trim();
+    const apiKey = String(env.RESEND_API_KEY || '').trim();
+    if (sender && apiKey) {
+      try {
+        const applicant = await env.DB.prepare(
+          'SELECT business_name, contact_email FROM ape_businesses WHERE id = ?'
+        ).bind(id).first();
+        if (applicant && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(applicant.contact_email || ''))) {
+          const approved = status === 'approved';
+          const subject = approved ? 'AI Profit Engine — Pilot application approved' : 'AI Profit Engine — Pilot application update';
+          const bodyText = approved
+            ? `Hello,\\n\\nYour AI Profit Engine pilot application for ${applicant.business_name || 'your business'} has been approved for review. We will contact you with next steps when onboarding is available. Approval does not create an account or activate a paid service.\\n\\nAI Profit Engine`
+            : `Hello,\\n\\nThank you for applying to the AI Profit Engine pilot for ${applicant.business_name || 'your business'}. We are unable to accept this application at this time.\\n\\nAI Profit Engine`;
+          const mailResponse = await fetch('https://api.resend.com/emails', {
+            method:'POST',
+            headers:{Authorization:'Bearer ' + apiKey,'Content-Type':'application/json'},
+            body:JSON.stringify({from:sender,to:[applicant.contact_email],subject,text:bodyText})
+          });
+          if (mailResponse.ok) {
+            const receipt = await mailResponse.json();
+            email = {sent:true, id:receipt.id || null};
+          } else {
+            console.error('Resend decision notification failed with status:', mailResponse.status);
+            email = {sent:false,reason:'Email provider rejected the notification.'};
+          }
+        } else {
+          email = {sent:false,reason:'Application contact email is invalid.'};
+        }
+      } catch (mailError) {
+        console.error('Decision email failed:', String(mailError));
+        email = {sent:false,reason:'Email notification could not be sent.'};
+      }
+    }
+    return reply({ok:true,id,status,email});
   } catch (error) {
     console.error('Application status update failed:', String(error));
     return reply({error:'Unable to update application.'}, 503);
