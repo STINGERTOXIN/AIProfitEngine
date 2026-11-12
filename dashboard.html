@@ -6,7 +6,7 @@
 <div id="status" class="card" role="status" aria-live="polite">Checking secure dashboard access and loading subscriber data…</div>
 <div id="stats" class="stats hidden"><div class="card"><div class="muted">Total subscribers</div><div id="total" class="stat">—</div></div><div class="card"><div class="muted">Last 7 days</div><div id="last7" class="stat">—</div></div><div class="card"><div class="muted">Last 30 days</div><div id="last30" class="stat">—</div></div></div>
 <section id="results" class="card hidden"><h2>Recent subscribers</h2><p class="muted">Up to 100 most recent entries. Subscriber emails are shown only after server-side administrator verification.</p><div class="tablewrap"><table><thead><tr><th>Email</th><th>Status</th><th>Joined</th></tr></thead><tbody id="rows"></tbody></table></div><p id="empty" class="muted hidden">No subscribers yet.</p></section>
-<section id="applications" class="card hidden"><h2>Pilot applications</h2><p class="muted">Latest 100 applications. Review only; approvals and customer onboarding are not enabled yet.</p><div class="tablewrap"><table><thead><tr><th>Business</th><th>Contact email</th><th>Plan</th><th>Status</th><th>Applied</th></tr></thead><tbody id="application-rows"></tbody></table></div><p id="applications-empty" class="muted hidden">No pilot applications yet.</p></section>
+<section id="applications" class="card hidden"><h2>Pilot applications</h2><p class="muted">Latest 100 applications. Review only; approvals and customer onboarding are not enabled yet.</p><div class="tablewrap"><table><thead><tr><th>Business</th><th>Contact email</th><th>Plan</th><th>Status</th><th>Applied</th><th>Review</th></tr></thead><tbody id="application-rows"></tbody></table></div><p id="applications-empty" class="muted hidden">No pilot applications yet.</p></section>
 <section class="card"><h2>Security</h2><p class="muted">This page must be protected by Cloudflare Access. The subscriber API independently verifies a signed Access token, the application audience, and the administrator email. Do not remove these protections.</p></section>
 </main><script>
 const $=id=>document.getElementById(id);
@@ -22,7 +22,27 @@ async function load(){
   for(const item of list){const tr=document.createElement('tr');cell(tr,item.email);cell(tr,item.status);cell(tr,item.created_at);rows.appendChild(tr)}
   $('empty').classList.toggle('hidden',list.length!==0);$('stats').classList.remove('hidden');$('results').classList.remove('hidden');$('status').classList.add('hidden');
   const appRows=$('application-rows');appRows.replaceChildren();const apps=Array.isArray(data.applications)?data.applications:[];
-  for(const app of apps){const tr=document.createElement('tr');for(const key of ['business_name','contact_email','plan','status','created_at'])cell(tr,app[key]);appRows.appendChild(tr)}
+  for(const app of apps){
+   const tr=document.createElement('tr');
+   for(const key of ['business_name','contact_email','plan','status','created_at'])cell(tr,app[key]);
+   const action=document.createElement('td');
+   if(app.status==='pending' && Number.isSafeInteger(app.id)){
+     for(const [label,status] of [['Approve','approved'],['Reject','rejected']]){
+       const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.style.marginRight='8px';
+       btn.addEventListener('click',async()=>{
+         if(!confirm(label+' application for '+app.business_name+'? This only updates its review status; it does not create an account or send an email.'))return;
+         btn.disabled=true;
+         try{
+           const response=await fetch('/api/admin/subscribers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({id:app.id,status})});
+           const result=await response.json();
+           if(!response.ok)throw Error(result.error||'Update failed');
+           await load();
+         }catch(err){alert('Could not update application: '+err.message);btn.disabled=false}
+       });action.appendChild(btn);
+     }
+   }else{action.textContent='Reviewed'}
+   tr.appendChild(action);appRows.appendChild(tr)
+ }
   $('applications-empty').classList.toggle('hidden',apps.length!==0);$('applications').classList.remove('hidden');
  }catch(err){$('status').classList.add('error');$('status').textContent='Dashboard not ready: '+(err.message||'Unknown error')+' Your subscriber information remains protected.'}
  finally{$('refresh').disabled=false}
