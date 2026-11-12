@@ -4,7 +4,7 @@
 // Allow only that endpoint to reach its independent authorization handler.
 export async function onRequest({request,next}) {
   const url = new URL(request.url);
-  if (request.method === 'GET' && url.pathname === '/api/admin/subscribers') {
+  if ((request.method === 'GET' || request.method === 'POST') && url.pathname === '/api/admin/subscribers') {
     // Without an Access assertion, never query or expose subscriber data.
     if (!request.headers.get('Cf-Access-Jwt-Assertion')) {
       return Response.json(
