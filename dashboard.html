@@ -6,7 +6,7 @@
 <div id="status" class="card" role="status" aria-live="polite">Checking secure dashboard access and loading subscriber data…</div>
 <div id="stats" class="stats hidden"><div class="card"><div class="muted">Total subscribers</div><div id="total" class="stat">—</div></div><div class="card"><div class="muted">Last 7 days</div><div id="last7" class="stat">—</div></div><div class="card"><div class="muted">Last 30 days</div><div id="last30" class="stat">—</div></div></div>
 <section id="results" class="card hidden"><h2>Recent subscribers</h2><p class="muted">Up to 100 most recent entries. Subscriber emails are shown only after server-side administrator verification.</p><div class="tablewrap"><table><thead><tr><th>Email</th><th>Status</th><th>Joined</th></tr></thead><tbody id="rows"></tbody></table></div><p id="empty" class="muted hidden">No subscribers yet.</p></section>
-<section id="applications" class="card hidden"><h2>Pilot applications</h2><p class="muted">Latest 100 applications. Review only; approvals and customer onboarding are not enabled yet.</p><div class="tablewrap"><table><thead><tr><th>Business</th><th>Contact email</th><th>Plan</th><th>Status</th><th>Applied</th><th>Review</th></tr></thead><tbody id="application-rows"></tbody></table></div><p id="applications-empty" class="muted hidden">No pilot applications yet.</p></section>
+<section id="applications" class="card hidden"><h2>Pilot applications</h2><p class="muted">Latest 100 applications. Review decisions update application status. Decision emails are sent when a verified sender is configured; account onboarding is not enabled yet.</p><div class="tablewrap"><table><thead><tr><th>Business</th><th>Contact email</th><th>Plan</th><th>Status</th><th>Applied</th><th>Review</th></tr></thead><tbody id="application-rows"></tbody></table></div><p id="applications-empty" class="muted hidden">No pilot applications yet.</p></section>
 <section class="card"><h2>Security</h2><p class="muted">This page must be protected by Cloudflare Access. The subscriber API independently verifies a signed Access token, the application audience, and the administrator email. Do not remove these protections.</p></section>
 </main><script>
 const $=id=>document.getElementById(id);
@@ -30,13 +30,13 @@ async function load(){
      for(const [label,status] of [['Approve','approved'],['Reject','rejected']]){
        const btn=document.createElement('button');btn.type='button';btn.textContent=label;btn.style.marginRight='8px';
        btn.addEventListener('click',async()=>{
-         if(!confirm(label+' application for '+app.business_name+'? This only updates its review status; it does not create an account or send an email.'))return;
+         if(!confirm(label+' application for '+app.business_name+'? This updates its review status and may send an email notification if configured; it does not create an account.'))return;
          btn.disabled=true;
          try{
            const response=await fetch('/api/admin/subscribers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({id:app.id,status})});
            const result=await response.json();
            if(!response.ok)throw Error(result.error||'Update failed');
-           await load();
+           await load();\n           alert(result.email?.sent ? 'Application updated. Resend accepted the notification email.' : 'Application updated. No email was sent: '+(result.email?.reason || 'Email is not configured.'));
          }catch(err){alert('Could not update application: '+err.message);btn.disabled=false}
        });action.appendChild(btn);
      }
