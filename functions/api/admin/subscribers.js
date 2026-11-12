@@ -105,7 +105,7 @@ export async function onRequestPost({request, env}) {
         const applicant = await env.DB.prepare(
           'SELECT business_name, contact_email FROM ape_businesses WHERE id = ?'
         ).bind(id).first();
-        if (applicant && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(applicant.contact_email || ''))) {
+        if (applicant && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(applicant.contact_email || ''))) {
           const approved = status === 'approved';
           const subject = approved ? 'AI Profit Engine — Pilot application approved' : 'AI Profit Engine — Pilot application update';
           const bodyText = approved
