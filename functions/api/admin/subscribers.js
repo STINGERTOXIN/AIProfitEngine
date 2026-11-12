@@ -33,7 +33,9 @@ async function authorized(request, env) {
       typeof claims.exp !== 'number' || claims.exp <= now ||
       (typeof claims.nbf === 'number' && claims.nbf > now) ||
       String(claims.email || '').toLowerCase() !== email) return false;
-  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {redirect: 'error'});
+  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {redirect: 'manual'});
+  // Never follow redirects when fetching Cloudflare Access signing keys.
+  if (certResponse.status >= 300 && certResponse.status < 400) return false;
   if (!certResponse.ok) return false;
   const keys = await certResponse.json();
   const jwk = (keys.keys || []).find(key => key.kid === header.kid && key.kty === 'RSA');
