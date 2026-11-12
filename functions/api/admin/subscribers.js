@@ -109,8 +109,8 @@ export async function onRequestPost({request, env}) {
           const approved = status === 'approved';
           const subject = approved ? 'AI Profit Engine — Pilot application approved' : 'AI Profit Engine — Pilot application update';
           const bodyText = approved
-            ? `Hello,\\n\\nYour AI Profit Engine pilot application for ${applicant.business_name || 'your business'} has been approved for review. We will contact you with next steps when onboarding is available. Approval does not create an account or activate a paid service.\\n\\nAI Profit Engine`
-            : `Hello,\\n\\nThank you for applying to the AI Profit Engine pilot for ${applicant.business_name || 'your business'}. We are unable to accept this application at this time.\\n\\nAI Profit Engine`;
+            ? `Hello,\n\nYour AI Profit Engine pilot application for ${applicant.business_name || 'your business'} has been approved for review. We will contact you with next steps when onboarding is available. Approval does not create an account or activate a paid service.\n\nAI Profit Engine`
+            : `Hello,\n\nThank you for applying to the AI Profit Engine pilot for ${applicant.business_name || 'your business'}. We are unable to accept this application at this time.\n\nAI Profit Engine`;
           const mailResponse = await fetch('https://api.resend.com/emails', {
             method:'POST',
             headers:{Authorization:'Bearer ' + apiKey,'Content-Type':'application/json'},
