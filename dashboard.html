@@ -36,7 +36,8 @@ async function load(){
            const response=await fetch('/api/admin/subscribers',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({id:app.id,status})});
            const result=await response.json();
            if(!response.ok)throw Error(result.error||'Update failed');
-           await load();\n           alert(result.email?.sent ? 'Application updated. Resend accepted the notification email.' : 'Application updated. No email was sent: '+(result.email?.reason || 'Email is not configured.'));
+           await load();
+           alert(result.email?.sent ? 'Application updated. Resend accepted the notification email.' : 'Application updated. No email was sent: '+(result.email?.reason || 'Email is not configured.'));
          }catch(err){alert('Could not update application: '+err.message);btn.disabled=false}
        });action.appendChild(btn);
      }
