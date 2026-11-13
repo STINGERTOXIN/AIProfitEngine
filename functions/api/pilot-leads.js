@@ -43,10 +43,14 @@ export async function onRequest({request,env}){
  try{
   const fields=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
   const hasInquiry=fields.some(col=>col.name==="inquiry");
+  // Automatically schedule a first follow-up for opted-in email leads.
+  // Existing leads and manually chosen dates remain unchanged.
+  const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const initialFollowUp=optIn?tomorrow:null;
   if(hasInquiry){
-   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,inquiry,email_opt_in) VALUES (?,?,?,?,?,?)").bind(user.id,name,contact,notes,notes,optIn).run();
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,inquiry,email_opt_in,follow_up_date) VALUES (?,?,?,?,?,?,?)").bind(user.id,name,contact,notes,notes,optIn,initialFollowUp).run();
   }else{
-   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,email_opt_in) VALUES (?,?,?,?,?)").bind(user.id,name,contact,notes,optIn).run();
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,email_opt_in,follow_up_date) VALUES (?,?,?,?,?,?)").bind(user.id,name,contact,notes,optIn,initialFollowUp).run();
   }
  }catch(error){
   console.error("Pilot lead insert failed",String(error));
