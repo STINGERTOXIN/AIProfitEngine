@@ -29,7 +29,8 @@ export async function onRequest({request,env}){
  }
  if(request.method==="GET"){
  stage="list";
- const data=await db.prepare("SELECT id,customer_name,contact,notes,status,follow_up_date,created_at,email_opt_in,email_unsubscribed FROM ape_leads WHERE business_id=? ORDER BY id DESC LIMIT 100").bind(user.id).all();
+ await db.prepare("CREATE TABLE IF NOT EXISTS ape_customer_followup_sent (lead_id INTEGER NOT NULL,follow_up_date TEXT NOT NULL,recipient TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',sent_at TEXT,PRIMARY KEY(lead_id,follow_up_date,recipient))").run();
+ const data=await db.prepare("SELECT l.id,l.customer_name,l.contact,l.notes,l.status,l.follow_up_date,l.created_at,l.email_opt_in,l.email_unsubscribed,(SELECT s.sent_at FROM ape_customer_followup_sent s WHERE s.lead_id=l.id AND s.status='sent' ORDER BY s.sent_at DESC LIMIT 1) AS last_customer_email_sent_at FROM ape_leads l WHERE l.business_id=? ORDER BY l.id DESC LIMIT 100").bind(user.id).all();
  return respond({business:user.name,leads:data.results||[]});
  }
  if(request.method!=="POST")return respond({error:"Method not allowed"},405);
