@@ -1,0 +1,21 @@
+name: APE follow-up reminders
+on:
+  schedule:
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+jobs:
+  send-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run secured reminder check
+        env:
+          REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
+        run: |
+          if [ -z "$REMINDER_CRON_SECRET" ]; then
+            echo "REMINDER_CRON_SECRET repository secret is missing"
+            exit 1
+          fi
+          curl --fail-with-body --show-error --silent --retry 2 \
+            --request POST \
+            --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
+            "https://aiprofitengine.ai/api/follow-up-reminders"
