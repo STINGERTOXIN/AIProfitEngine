@@ -30,7 +30,9 @@ export async function onRequest({request,env}){
  if(request.method==="GET"){
  stage="list";
  await db.prepare("CREATE TABLE IF NOT EXISTS ape_customer_followup_sent (lead_id INTEGER NOT NULL,follow_up_date TEXT NOT NULL,recipient TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',sent_at TEXT,PRIMARY KEY(lead_id,follow_up_date,recipient))").run();
- const data=await db.prepare("SELECT l.id,l.customer_name,l.contact,l.notes,l.status,l.follow_up_date,l.created_at,l.email_opt_in,l.email_unsubscribed,(SELECT s.sent_at FROM ape_customer_followup_sent s WHERE s.lead_id=l.id AND s.status='sent' ORDER BY s.sent_at DESC LIMIT 1) AS last_customer_email_sent_at FROM ape_leads l WHERE l.business_id=? ORDER BY l.id DESC LIMIT 100").bind(user.id).all();
+ const deliveryCols=(await db.prepare("PRAGMA table_info(ape_customer_followup_sent)").all()).results||[];
+ if(!deliveryCols.some(c=>c.name==="delivery_status"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN delivery_status TEXT").run();
+ const data=await db.prepare("SELECT l.id,l.customer_name,l.contact,l.notes,l.status,l.follow_up_date,l.created_at,l.email_opt_in,l.email_unsubscribed,(SELECT s.sent_at FROM ape_customer_followup_sent s WHERE s.lead_id=l.id AND s.status='sent' ORDER BY s.sent_at DESC LIMIT 1) AS last_customer_email_sent_at,(SELECT s.delivery_status FROM ape_customer_followup_sent s WHERE s.lead_id=l.id AND s.provider_email_id IS NOT NULL ORDER BY s.sent_at DESC LIMIT 1) AS last_customer_email_delivery_status FROM ape_leads l WHERE l.business_id=? ORDER BY l.id DESC LIMIT 100").bind(user.id).all();
  return respond({business:user.name,leads:data.results||[]});
  }
  if(request.method!=="POST")return respond({error:"Method not allowed"},405);
