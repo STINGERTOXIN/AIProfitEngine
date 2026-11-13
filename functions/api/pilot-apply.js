@@ -27,7 +27,7 @@ export async function onRequestPost({request,env,context}){
      body:JSON.stringify({
       from:sender,to:[admin],
       subject:'AI Profit Engine — New pilot application',
-      text:'A new pilot application needs review.\\n\\nBusiness: '+business+'\nContact: '+email+'\nPlan: pilot\\nStatus: pending\\n\\nReview applications in your protected dashboard: https://aiprofitengine.ai/dashboard'
+      text:'A new pilot application needs review.\n\nBusiness: '+business+'\nContact: '+email+'\nPlan: pilot\nStatus: pending\n\nReview applications in your protected dashboard: https://aiprofitengine.ai/dashboard'
      })
     });
     if(!sent.ok)console.error('Pilot administrator notification rejected:',sent.status);
