@@ -18,7 +18,7 @@ export async function onRequestPost({request,env,context}){
  const admin=String(env.ADMIN_EMAIL||'').trim();
  const sender=String(env.RESEND_FROM_EMAIL||'').trim();
  const key=String(env.RESEND_API_KEY||'').trim();
- if(admin && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(admin) && sender && key){
+ if(admin && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(admin) && sender && key){
   const notify=async()=>{
    try{
     const sent=await fetch('https://api.resend.com/emails',{
@@ -27,7 +27,7 @@ export async function onRequestPost({request,env,context}){
      body:JSON.stringify({
       from:sender,to:[admin],
       subject:'AI Profit Engine — New pilot application',
-      text:'A new pilot application needs review.\\n\\nBusiness: '+business+'\\nContact: '+email+'\\nPlan: pilot\\nStatus: pending\\n\\nReview applications in your protected dashboard: https://aiprofitengine.ai/dashboard'
+      text:'A new pilot application needs review.\\n\\nBusiness: '+business+'\nContact: '+email+'\nPlan: pilot\\nStatus: pending\\n\\nReview applications in your protected dashboard: https://aiprofitengine.ai/dashboard'
      })
     });
     if(!sent.ok)console.error('Pilot administrator notification rejected:',sent.status);
