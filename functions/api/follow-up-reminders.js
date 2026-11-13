@@ -15,9 +15,13 @@ export async function onRequestPost({request,env}){
    const recipient=String(lead.contact_email||"").trim().toLowerCase();
    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)){failed++;console.error("Invalid business contact email for lead",lead.id);continue}
 
+   const claim=await db.prepare("INSERT OR IGNORE INTO ape_reminder_sent (lead_id,follow_up_date,recipient) VALUES (?,?,?)").bind(lead.id,lead.follow_up_date,recipient).run();
+   if(!claim.meta?.changes)continue;
    const html="<h2>A.P.E. lead follow-up reminder</h2><p><b>Business:</b> "+escape(lead.business_name)+"</p><p><b>Customer:</b> "+escape(lead.customer_name)+"</p><p><b>Due:</b> "+escape(lead.follow_up_date)+"</p><p><b>Status:</b> "+escape(lead.status)+"</p><p><a href='https://aiprofitengine.ai/leads'>Open lead manager</a></p>";
-   const result=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"A.P.E. follow-up due: "+lead.customer_name,text:"A.P.E. follow-up reminder\nBusiness: "+lead.business_name+"\nCustomer: "+lead.customer_name+"\nDue: "+lead.follow_up_date+"\nStatus: "+lead.status+"\nhttps://aiprofitengine.ai/leads",html})});
-   if(result.ok){await db.prepare("INSERT OR IGNORE INTO ape_reminder_sent (lead_id,follow_up_date,recipient) VALUES (?,?,?)").bind(lead.id,lead.follow_up_date,recipient).run();sent++}else{failed++;console.error("Resend reminder failed",result.status)}
+   try{
+    const result=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"A.P.E. follow-up due: "+lead.customer_name,text:"A.P.E. follow-up reminder\nBusiness: "+lead.business_name+"\nCustomer: "+lead.customer_name+"\nDue: "+lead.follow_up_date+"\nStatus: "+lead.status+"\nhttps://aiprofitengine.ai/leads",html})});
+    if(result.ok){sent++}else{failed++;console.error("Resend reminder failed",result.status);await db.prepare("DELETE FROM ape_reminder_sent WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(lead.id,lead.follow_up_date,recipient).run()}
+   }catch(e){failed++;console.error("Business reminder outcome unknown; retaining claim to avoid duplicate",String(e))}
   }
 
   // Customer-facing messages are explicitly opt-in and feature-flagged off by default.
