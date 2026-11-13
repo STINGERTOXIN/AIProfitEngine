@@ -24,28 +24,29 @@ export async function onRequest({request,env}){
  const columns=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
  const existing=new Set(columns.map(column=>column.name));
  if(!existing.has("business_id")||!existing.has("id")||!existing.has("customer_name"))return respond({error:"Lead table needs a manual schema update",step:"schema",missing:["id","business_id","customer_name"].filter(name=>!existing.has(name))},503);
- for(const [name,definition] of [["contact","TEXT NOT NULL DEFAULT ''"],["notes","TEXT NOT NULL DEFAULT ''"],["status","TEXT NOT NULL DEFAULT 'new'"],["follow_up_date","TEXT"],["created_at","TEXT"],["updated_at","TEXT"]]){
+ for(const [name,definition] of [["contact","TEXT NOT NULL DEFAULT ''"],["notes","TEXT NOT NULL DEFAULT ''"],["status","TEXT NOT NULL DEFAULT 'new'"],["follow_up_date","TEXT"],["created_at","TEXT"],["updated_at","TEXT"],["email_opt_in","INTEGER NOT NULL DEFAULT 0"],["email_unsubscribed","INTEGER NOT NULL DEFAULT 0"]]){
   if(!existing.has(name))await db.prepare("ALTER TABLE ape_leads ADD COLUMN "+name+" "+definition).run();
  }
  if(request.method==="GET"){
  stage="list";
- const data=await db.prepare("SELECT id,customer_name,contact,notes,status,follow_up_date,created_at FROM ape_leads WHERE business_id=? ORDER BY id DESC LIMIT 100").bind(user.id).all();
+ const data=await db.prepare("SELECT id,customer_name,contact,notes,status,follow_up_date,created_at,email_opt_in,email_unsubscribed FROM ape_leads WHERE business_id=? ORDER BY id DESC LIMIT 100").bind(user.id).all();
  return respond({business:user.name,leads:data.results||[]});
  }
  if(request.method!=="POST")return respond({error:"Method not allowed"},405);
  if((Number(request.headers.get("content-length"))||0)>8192)return respond({error:"Request too large"},413);
  let body;try{body=await request.json()}catch{return respond({error:"Invalid request"},400)}
  if(body?.action==="add"){
- const name=String(body.customer_name||"").trim(),contact=String(body.contact||"").trim(),notes=String(body.notes||"").trim();
+ const name=String(body.customer_name||"").trim(),contact=String(body.contact||"").trim(),notes=String(body.notes||"").trim(),optIn=body.email_opt_in===true?1:0;
  if(!name||name.length>120||!contact||contact.length>254||notes.length>2000)return respond({error:"Enter a name and contact details; keep notes under 2000 characters"},400);
+ if(optIn&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact))return respond({error:"An email address is required for automatic email follow-ups"},400);
  stage="insert";
  try{
   const fields=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
   const hasInquiry=fields.some(col=>col.name==="inquiry");
   if(hasInquiry){
-   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,inquiry) VALUES (?,?,?,?,?)").bind(user.id,name,contact,notes,notes).run();
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,inquiry,email_opt_in) VALUES (?,?,?,?,?,?)").bind(user.id,name,contact,notes,notes,optIn).run();
   }else{
-   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,email_opt_in) VALUES (?,?,?,?,?)").bind(user.id,name,contact,notes,optIn).run();
   }
  }catch(error){
   console.error("Pilot lead insert failed",String(error));
