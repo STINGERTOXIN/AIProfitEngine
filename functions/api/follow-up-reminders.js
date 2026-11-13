@@ -39,7 +39,7 @@ export async function onRequestPost({request,env}){
     const token=Array.from(new Uint8Array(await crypto.subtle.sign("HMAC",key,encoder.encode(String(lead.id)+":"+recipient))),x=>x.toString(16).padStart(2,"0")).join("");
     const unsubscribe="https://aiprofitengine.ai/api/unsubscribe-followup?id="+encodeURIComponent(lead.id)+"&token="+token;
     const business=String(lead.business_name||"the business");
-    const plain="Hello "+lead.customer_name+",\\n\\nThis is a friendly follow-up from "+business+" regarding your recent inquiry. If you still need assistance, simply reply to this email.\\n\\nThank you,\\n"+business+"\\n\\nStop these follow-ups: "+unsubscribe;
+    const plain=["Hello "+lead.customer_name+",","","This is a friendly follow-up from "+business+" regarding your recent inquiry. If you still need assistance, simply reply to this email.","","Thank you,",business,"","Stop these follow-ups: "+unsubscribe].join(String.fromCharCode(10));
     const html="<p>Hello "+escape(lead.customer_name)+",</p><p>This is a friendly follow-up from <strong>"+escape(business)+"</strong> regarding your recent inquiry. If you still need assistance, simply reply to this email.</p><p>Thank you,<br>"+escape(business)+"</p><p><small><a href='"+unsubscribe+"'>Unsubscribe from follow-ups</a></small></p>";
     const sender=String(lead.contact_email||"").trim();
     const payload={from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"Following up on your inquiry — "+business,text:plain,html,headers:{"List-Unsubscribe":"<"+unsubscribe+">"}};
