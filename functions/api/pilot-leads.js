@@ -14,11 +14,14 @@ export async function onRequest({request,env}){
  if(!env.DB)return respond({error:"Database unavailable"},503);
  const origin=request.headers.get("Origin"),url=new URL(request.url);
  if(origin&&origin!==url.origin)return respond({error:"Invalid origin"},403);
+ let stage="session";
  try{
  const db=env.DB,user=await actor(request,db);
  if(!user)return respond({error:"Sign in to access your leads"},401);
+ stage="schema";
  await db.prepare("CREATE TABLE IF NOT EXISTS ape_leads (id INTEGER PRIMARY KEY AUTOINCREMENT,business_id INTEGER NOT NULL,customer_name TEXT NOT NULL,contact TEXT NOT NULL,notes TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'new',follow_up_date TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
  if(request.method==="GET"){
+ stage="list";
  const data=await db.prepare("SELECT id,customer_name,contact,notes,status,follow_up_date,created_at FROM ape_leads WHERE business_id=? ORDER BY id DESC LIMIT 100").bind(user.id).all();
  return respond({business:user.name,leads:data.results||[]});
  }
@@ -28,15 +31,17 @@ export async function onRequest({request,env}){
  if(body?.action==="add"){
  const name=String(body.customer_name||"").trim(),contact=String(body.contact||"").trim(),notes=String(body.notes||"").trim();
  if(!name||name.length>120||!contact||contact.length>254||notes.length>2000)return respond({error:"Enter a name and contact details; keep notes under 2000 characters"},400);
+ stage="insert";
  await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
  return respond({ok:true});
  }
  if(body?.action==="update"){
  const id=Number(body.id),status=String(body.status||""),date=body.follow_up_date==null||body.follow_up_date===""?null:String(body.follow_up_date);
  if(!Number.isSafeInteger(id)||id<1||!statuses.includes(status)||date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))return respond({error:"Invalid lead update"},400);
+ stage="update";
  const result=await db.prepare("UPDATE ape_leads SET status=?,follow_up_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND business_id=?").bind(status,date,id,user.id).run();
  return respond({ok:true,updated:result.meta?.changes||0});
  }
  return respond({error:"Unknown action"},400);
- }catch(e){console.error("Pilot leads request failed",String(e));return respond({error:"Could not complete request"},503)}
+ }catch(e){console.error("Pilot leads request failed",String(e));return respond({error:"Lead manager unavailable",step:stage},503)}
 }
