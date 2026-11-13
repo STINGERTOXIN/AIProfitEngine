@@ -37,7 +37,11 @@ export async function onRequestPost({request,env}){
    // Suppress only the matching lead, never unrelated customers.
    await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT lead_id FROM ape_customer_followup_sent WHERE provider_email_id=?)").bind(emailId).run();
   }
-  return json({ok:true,matched:(updated.meta?.changes||0)>0});
+  const matched=(updated.meta?.changes||0)>0;
+  // Log only event type and match outcome; do not log email addresses, secrets, or payloads.
+  // A valid repeated or out-of-order event may be unmatched because its status is already recorded.
+  console.info("Resend webhook processed",{eventType:event.type,updated:matched});
+  return json({ok:true,matched});
  }catch(error){console.error("Resend webhook storage failure",String(error));return json({error:"Webhook processing unavailable"},503)}
 }
 export async function onRequestGet(){return json({error:"Method not allowed"},405)}
