@@ -50,8 +50,12 @@ export async function onRequestPost({request,env}){
     const sender=String(lead.contact_email||"").trim();
     const payload={from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"Following up on your inquiry — "+business,text:plain,html,headers:{"List-Unsubscribe":"<"+unsubscribe+">"}};
     if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender))payload.reply_to=sender;
+    // Stable provider-side idempotency key adds protection if a request is retried.
+    // Hash the recipient so the header never contains a customer email address.
+    const dedupeInput="customer:"+lead.id+":"+lead.follow_up_date+":"+recipient;
+    const dedupeHash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",encoder.encode(dedupeInput))),x=>x.toString(16).padStart(2,"0")).join("");
     try{
-     const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+     const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json","Idempotency-Key":"ape-followup-"+dedupeHash},body:JSON.stringify(payload)});
      if(response.ok){let providerId=null;try{const providerData=await response.json();providerId=typeof providerData?.id==="string"?providerData.id:null}catch{}await db.prepare("UPDATE ape_customer_followup_sent SET status='sent',sent_at=CURRENT_TIMESTAMP,provider_email_id=? WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(providerId,lead.id,lead.follow_up_date,recipient).run();customerSent++}
      else{customerFailed++;console.error("Customer follow-up provider error",response.status);await db.prepare("DELETE FROM ape_customer_followup_sent WHERE lead_id=? AND follow_up_date=? AND recipient=? AND status='pending'").bind(lead.id,lead.follow_up_date,recipient).run()}
     }catch(e){customerFailed++;console.error("Customer follow-up request failed",String(e));/* Leave pending to avoid a duplicate when delivery outcome is unknown. */}
