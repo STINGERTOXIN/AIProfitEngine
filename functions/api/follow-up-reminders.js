@@ -32,7 +32,7 @@ export async function onRequestPost({request,env}){
    for(const lead of customers){
     customerChecked++;
     const recipient=String(lead.contact||"").trim().toLowerCase();
-    if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(recipient)){customerFailed++;continue}
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)){customerFailed++;continue}
     // Claim before sending so concurrent scheduled runs cannot send the same email twice.
     const claim=await db.prepare("INSERT OR IGNORE INTO ape_customer_followup_sent (lead_id,follow_up_date,recipient) VALUES (?,?,?)").bind(lead.id,lead.follow_up_date,recipient).run();
     if(!claim.meta?.changes)continue;
@@ -43,7 +43,7 @@ export async function onRequestPost({request,env}){
     const html="<p>Hello "+escape(lead.customer_name)+",</p><p>This is a friendly follow-up from <strong>"+escape(business)+"</strong> regarding your recent inquiry. If you still need assistance, simply reply to this email.</p><p>Thank you,<br>"+escape(business)+"</p><p><small><a href='"+unsubscribe+"'>Unsubscribe from follow-ups</a></small></p>";
     const sender=String(lead.contact_email||"").trim();
     const payload={from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"Following up on your inquiry — "+business,text:plain,html,headers:{"List-Unsubscribe":"<"+unsubscribe+">"}};
-    if(/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(sender))payload.reply_to=sender;
+    if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender))payload.reply_to=sender;
     try{
      const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload)});
      if(response.ok){await db.prepare("UPDATE ape_customer_followup_sent SET status='sent',sent_at=CURRENT_TIMESTAMP WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(lead.id,lead.follow_up_date,recipient).run();customerSent++}
