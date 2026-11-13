@@ -61,6 +61,12 @@ export async function onRequest({request,env}){
  }
  return respond({ok:true});
  }
+ if(body?.action==="disable_emails"){
+ const id=Number(body.id);
+ if(!Number.isSafeInteger(id)||id<1)return respond({error:"Invalid lead"},400);
+ const result=await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND business_id=?").bind(id,user.id).run();
+ return respond({ok:true,updated:result.meta?.changes||0});
+ }
  if(body?.action==="update"){
  const id=Number(body.id),status=String(body.status||""),date=body.follow_up_date==null||body.follow_up_date===""?null:String(body.follow_up_date);
  if(!Number.isSafeInteger(id)||id<1||!statuses.includes(status)||date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))return respond({error:"Invalid lead update"},400);
