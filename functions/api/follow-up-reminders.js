@@ -26,6 +26,8 @@ export async function onRequestPost({request,env}){
    const schema=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
    if(!["email_opt_in","email_unsubscribed"].every(x=>schema.some(c=>c.name===x)))return json({error:"Customer follow-up schema not ready",sent,failed},503);
    await db.prepare("CREATE TABLE IF NOT EXISTS ape_customer_followup_sent (lead_id INTEGER NOT NULL,follow_up_date TEXT NOT NULL,recipient TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',sent_at TEXT,PRIMARY KEY(lead_id,follow_up_date,recipient))").run();
+   const deliveryColumns=(await db.prepare("PRAGMA table_info(ape_customer_followup_sent)").all()).results||[];
+   if(!deliveryColumns.some(c=>c.name==="provider_email_id"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN provider_email_id TEXT").run();
    const customers=(await db.prepare("SELECT l.id,l.customer_name,l.contact,l.follow_up_date,l.status,b.business_name,b.contact_email FROM ape_leads l JOIN ape_businesses b ON b.id=l.business_id WHERE b.status='approved' AND l.email_opt_in=1 AND l.email_unsubscribed=0 AND l.follow_up_date IS NOT NULL AND l.follow_up_date<=? AND l.status IN ('new','contacted','follow_up') AND NOT EXISTS (SELECT 1 FROM ape_customer_followup_sent s WHERE s.lead_id=l.id AND s.follow_up_date=l.follow_up_date AND s.recipient=lower(trim(l.contact))) ORDER BY l.follow_up_date,l.id LIMIT 25").bind(today).all()).results||[];
    const encoder=new TextEncoder();
    const key=await crypto.subtle.importKey("raw",encoder.encode(env.REMINDER_CRON_SECRET),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
@@ -46,7 +48,7 @@ export async function onRequestPost({request,env}){
     if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender))payload.reply_to=sender;
     try{
      const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload)});
-     if(response.ok){await db.prepare("UPDATE ape_customer_followup_sent SET status='sent',sent_at=CURRENT_TIMESTAMP WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(lead.id,lead.follow_up_date,recipient).run();customerSent++}
+     if(response.ok){let providerId=null;try{const providerData=await response.json();providerId=typeof providerData?.id==="string"?providerData.id:null}catch{}await db.prepare("UPDATE ape_customer_followup_sent SET status='sent',sent_at=CURRENT_TIMESTAMP,provider_email_id=? WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(providerId,lead.id,lead.follow_up_date,recipient).run();customerSent++}
      else{customerFailed++;console.error("Customer follow-up provider error",response.status);await db.prepare("DELETE FROM ape_customer_followup_sent WHERE lead_id=? AND follow_up_date=? AND recipient=? AND status='pending'").bind(lead.id,lead.follow_up_date,recipient).run()}
     }catch(e){customerFailed++;console.error("Customer follow-up request failed",String(e));/* Leave pending to avoid a duplicate when delivery outcome is unknown. */}
    }
