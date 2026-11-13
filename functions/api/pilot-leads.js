@@ -23,8 +23,8 @@ export async function onRequest({request,env}){
  // Reconcile optional columns from older pilot lead table versions without dropping records.
  const columns=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
  const existing=new Set(columns.map(column=>column.name));
- if(!existing.has("business_id")||!existing.has("id")||!existing.has("customer_name")||!existing.has("contact"))return respond({error:"Lead table needs a manual schema update",step:"schema",missing:["id","business_id","customer_name","contact"].filter(name=>!existing.has(name))},503);
- for(const [name,definition] of [["notes","TEXT NOT NULL DEFAULT ''"],["status","TEXT NOT NULL DEFAULT 'new'"],["follow_up_date","TEXT"],["created_at","TEXT"],["updated_at","TEXT"]]){
+ if(!existing.has("business_id")||!existing.has("id")||!existing.has("customer_name"))return respond({error:"Lead table needs a manual schema update",step:"schema",missing:["id","business_id","customer_name"].filter(name=>!existing.has(name))},503);
+ for(const [name,definition] of [["contact","TEXT NOT NULL DEFAULT ''"],["notes","TEXT NOT NULL DEFAULT ''"],["status","TEXT NOT NULL DEFAULT 'new'"],["follow_up_date","TEXT"],["created_at","TEXT"],["updated_at","TEXT"]]){
   if(!existing.has(name))await db.prepare("ALTER TABLE ape_leads ADD COLUMN "+name+" "+definition).run();
  }
  if(request.method==="GET"){
