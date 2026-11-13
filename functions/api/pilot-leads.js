@@ -40,7 +40,13 @@ export async function onRequest({request,env}){
  if(!name||name.length>120||!contact||contact.length>254||notes.length>2000)return respond({error:"Enter a name and contact details; keep notes under 2000 characters"},400);
  stage="insert";
  try{
-  await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
+  const fields=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
+  const hasInquiry=fields.some(col=>col.name==="inquiry");
+  if(hasInquiry){
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes,inquiry) VALUES (?,?,?,?,?)").bind(user.id,name,contact,notes,notes).run();
+  }else{
+   await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
+  }
  }catch(error){
   console.error("Pilot lead insert failed",String(error));
   const schema=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
