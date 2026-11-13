@@ -5,7 +5,7 @@ const page=(message,status=200)=>new Response('<!doctype html><html lang="en"><m
 export async function onRequestGet({request,env}){
  if(!env.DB||!env.REMINDER_CRON_SECRET)return page("Email preferences are temporarily unavailable.",503);
  const url=new URL(request.url),id=url.searchParams.get("id")||"",token=url.searchParams.get("token")||"";
- if(!/^\\d{1,15}$/.test(id)||!/^[a-f0-9]{64}$/.test(token))return page("This unsubscribe link is invalid.",400);
+ if(!/^\d{1,15}$/.test(id)||!/^[a-f0-9]{64}$/.test(token))return page("This unsubscribe link is invalid.",400);
  try{
   const lead=await env.DB.prepare("SELECT id,contact FROM ape_leads WHERE id=?").bind(Number(id)).first();
   if(!lead)return page("This unsubscribe link is invalid.",400);
@@ -19,7 +19,7 @@ export async function onRequestPost({request,env}){
  if(!env.DB||!env.REMINDER_CRON_SECRET)return page("Email preferences are temporarily unavailable.",503);
  try{
   const form=await request.formData(),id=String(form.get("id")||""),token=String(form.get("token")||"");
-  if(!/^\\d{1,15}$/.test(id)||!/^[a-f0-9]{64}$/.test(token))return page("This unsubscribe link is invalid.",400);
+  if(!/^\d{1,15}$/.test(id)||!/^[a-f0-9]{64}$/.test(token))return page("This unsubscribe link is invalid.",400);
   const lead=await env.DB.prepare("SELECT id,contact FROM ape_leads WHERE id=?").bind(Number(id)).first();
   if(!lead||await signature(env.REMINDER_CRON_SECRET,id,String(lead.contact||"").trim())!==token)return page("This unsubscribe link is invalid.",400);
   await env.DB.prepare("UPDATE ape_leads SET email_unsubscribed=1,email_opt_in=0,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(Number(id)).run();
