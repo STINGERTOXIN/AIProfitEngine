@@ -39,7 +39,14 @@ export async function onRequest({request,env}){
  const name=String(body.customer_name||"").trim(),contact=String(body.contact||"").trim(),notes=String(body.notes||"").trim();
  if(!name||name.length>120||!contact||contact.length>254||notes.length>2000)return respond({error:"Enter a name and contact details; keep notes under 2000 characters"},400);
  stage="insert";
- await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
+ try{
+  await db.prepare("INSERT INTO ape_leads (business_id,customer_name,contact,notes) VALUES (?,?,?,?)").bind(user.id,name,contact,notes).run();
+ }catch(error){
+  console.error("Pilot lead insert failed",String(error));
+  const schema=(await db.prepare("PRAGMA table_info(ape_leads)").all()).results||[];
+  const required=schema.filter(col=>col.notnull===1&&col.dflt_value==null&&col.pk===0&&!["business_id","customer_name","contact","notes"].includes(col.name)).map(col=>col.name);
+  return respond({error:"Lead table has incompatible required columns",step:"insert",required_columns:required},503);
+ }
  return respond({ok:true});
  }
  if(body?.action==="update"){
