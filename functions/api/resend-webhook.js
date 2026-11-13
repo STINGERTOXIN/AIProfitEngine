@@ -5,7 +5,7 @@ function equal(a,b){if(a.length!==b.length)return false;let diff=0;for(let i=0;i
 async function verify(raw,headers,secret){
  const id=headers.get("svix-id"),stamp=headers.get("svix-timestamp"),signature=headers.get("svix-signature");
  if(!id||!stamp||!signature||!/^[0-9]{10,13}$/.test(stamp))return false;
- const timestamp=Number(stamp);if(!Number.isSafeInteger(timestamp)||Math.abs(Date.now()/1000-timestamp)>300)return false;
+ const timestamp=Number(stamp);if(!Number.isSafeInteger(timestamp)||Math.abs(Date.now()/1000-(stamp.length===13?timestamp/1000:timestamp))>300)return false;
  let key;try{key=decodeBase64(secret.startsWith("whsec_")?secret.slice(6):secret)}catch{return false}
  const encoder=new TextEncoder();
  const cryptoKey=await crypto.subtle.importKey("raw",key,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
@@ -13,6 +13,7 @@ async function verify(raw,headers,secret){
  return signature.split(" ").some(part=>{const [version,value]=part.split(",");if(version!=="v1"||!value)return false;try{return equal(digest,decodeBase64(value))}catch{return false}});
 }
 const eventStatuses={"email.delivered":"delivered","email.bounced":"bounced","email.failed":"failed","email.complained":"complained"};
+const priority={delivered:1,failed:2,bounced:3,complained:4};
 export async function onRequestPost({request,env}){
  if(!env.DB||!env.RESEND_WEBHOOK_SECRET)return json({error:"Webhook not configured"},503);
  if((Number(request.headers.get("content-length"))||0)>65536)return json({error:"Payload too large"},413);
@@ -31,7 +32,7 @@ export async function onRequestPost({request,env}){
   if(!columns.some(c=>c.name==="delivery_status"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN delivery_status TEXT").run();
   if(!columns.some(c=>c.name==="delivery_updated_at"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN delivery_updated_at TEXT").run();
   // Terminal negative events take precedence over later/out-of-order delivery notifications.
-  const updated=await db.prepare("UPDATE ape_customer_followup_sent SET delivery_status=?,delivery_updated_at=CURRENT_TIMESTAMP WHERE provider_email_id=? AND (delivery_status IS NULL OR delivery_status NOT IN ('bounced','failed','complained') OR ? IN ('bounced','failed','complained')) AND (delivery_status IS NULL OR delivery_status<>?)").bind(status,emailId,status,status).run();
+  const updated=await db.prepare("UPDATE ape_customer_followup_sent SET delivery_status=?,delivery_updated_at=CURRENT_TIMESTAMP WHERE provider_email_id=? AND (delivery_status IS NULL OR CASE delivery_status WHEN 'delivered' THEN 1 WHEN 'failed' THEN 2 WHEN 'bounced' THEN 3 WHEN 'complained' THEN 4 ELSE 0 END < ?)").bind(status,emailId,priority[status]).run();
   if(["bounced","complained"].includes(status)){
    // Suppress only the matching lead, never unrelated customers.
    await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT lead_id FROM ape_customer_followup_sent WHERE provider_email_id=?)").bind(emailId).run();
