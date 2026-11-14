@@ -8,6 +8,10 @@ export async function onRequestPost({request,env}){
  const db=env.DB;
  try{
   await db.prepare("CREATE TABLE IF NOT EXISTS ape_reminder_sent (lead_id INTEGER NOT NULL,follow_up_date TEXT NOT NULL,recipient TEXT NOT NULL,sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(lead_id,follow_up_date,recipient))").run();
+  const businessColumns=(await db.prepare("PRAGMA table_info(ape_reminder_sent)").all()).results||[];
+  for(const [name,type] of [["status","TEXT"],["provider_email_id","TEXT"],["delivery_status","TEXT"],["delivery_updated_at","TEXT"]]){
+   if(!businessColumns.some(c=>c.name===name))await db.prepare("ALTER TABLE ape_reminder_sent ADD COLUMN "+name+" "+type).run();
+  }
   const today=new Date().toISOString().slice(0,10);
   const leads=(await db.prepare("SELECT l.id,l.customer_name,l.follow_up_date,l.status,b.business_name,b.contact_email FROM ape_leads l JOIN ape_businesses b ON b.id=l.business_id WHERE b.status='approved' AND l.follow_up_date IS NOT NULL AND l.follow_up_date<=? AND l.status IN ('new','contacted','follow_up') AND trim(coalesce(b.contact_email,''))<>'' AND NOT EXISTS (SELECT 1 FROM ape_reminder_sent s WHERE s.lead_id=l.id AND s.follow_up_date=l.follow_up_date AND s.recipient=lower(trim(b.contact_email))) ORDER BY l.follow_up_date,l.id LIMIT 50").bind(today).all()).results||[];
   let sent=0,failed=0;
@@ -17,10 +21,17 @@ export async function onRequestPost({request,env}){
 
    const claim=await db.prepare("INSERT OR IGNORE INTO ape_reminder_sent (lead_id,follow_up_date,recipient) VALUES (?,?,?)").bind(lead.id,lead.follow_up_date,recipient).run();
    if(!claim.meta?.changes)continue;
+   const encoder=new TextEncoder();
+   const dedupeInput="business:"+lead.id+":"+lead.follow_up_date+":"+recipient;
+   const dedupeHash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",encoder.encode(dedupeInput))),x=>x.toString(16).padStart(2,"0")).join("");
    const html="<h2>A.P.E. lead follow-up reminder</h2><p><b>Business:</b> "+escape(lead.business_name)+"</p><p><b>Customer:</b> "+escape(lead.customer_name)+"</p><p><b>Due:</b> "+escape(lead.follow_up_date)+"</p><p><b>Status:</b> "+escape(lead.status)+"</p><p><a href='https://aiprofitengine.ai/leads'>Open lead manager</a></p>";
    try{
-    const result=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"A.P.E. follow-up due: "+lead.customer_name,text:"A.P.E. follow-up reminder\nBusiness: "+lead.business_name+"\nCustomer: "+lead.customer_name+"\nDue: "+lead.follow_up_date+"\nStatus: "+lead.status+"\nhttps://aiprofitengine.ai/leads",html})});
-    if(result.ok){sent++}else{failed++;console.error("Resend reminder failed",result.status);await db.prepare("DELETE FROM ape_reminder_sent WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(lead.id,lead.follow_up_date,recipient).run()}
+    const result=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json","Idempotency-Key":"ape-business-"+dedupeHash},body:JSON.stringify({from:env.RESEND_FROM_EMAIL,to:[recipient],subject:"A.P.E. follow-up due: "+lead.customer_name,text:"A.P.E. follow-up reminder\nBusiness: "+lead.business_name+"\nCustomer: "+lead.customer_name+"\nDue: "+lead.follow_up_date+"\nStatus: "+lead.status+"\nhttps://aiprofitengine.ai/leads",html})});
+    if(result.ok){
+     let providerId=null;try{const data=await result.json();providerId=typeof data?.id==="string"?data.id:null}catch{}
+     await db.prepare("UPDATE ape_reminder_sent SET status='sent',provider_email_id=? WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(providerId,lead.id,lead.follow_up_date,recipient).run();
+     sent++;
+    }else{failed++;console.error("Resend reminder failed",result.status);await db.prepare("DELETE FROM ape_reminder_sent WHERE lead_id=? AND follow_up_date=? AND recipient=?").bind(lead.id,lead.follow_up_date,recipient).run()}
    }catch(e){failed++;console.error("Business reminder outcome unknown; retaining claim to avoid duplicate",String(e))}
   }
 
