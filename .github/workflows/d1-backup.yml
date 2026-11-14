@@ -32,16 +32,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CF_ACCOUNT"
           test -n "$AWS_ACCESS_KEY_ID"
           test -n "$AWS_SECRET_ACCESS_KEY"
-          echo "Backup credentials configured."
+
+          echo "Backup configuration is present."
+
+      - name: Verify Cloudflare API token
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          response=$(curl \
+            --silent --show-error \
+            --max-time 30 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify")
+
+          echo "$response" | jq -c '{
+            success: .success,
+            status: .result.status,
+            errors: [.errors[]? | {code, message}]
+          }'
+
+          echo "$response" | jq -e \
+            '.success == true and .result.status == "active"' \
+            > /dev/null
+
+          echo "Cloudflare API token is active."
 
       - name: Export both D1 databases
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p backups
           STAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
           echo "STAMP=$STAMP" >> "$GITHUB_ENV"
@@ -55,6 +81,8 @@ jobs:
             local url=""
             local output="backups/${name}-${STAMP}.sql"
 
+            echo "Starting export: $name"
+
             for attempt in $(seq 1 60); do
               body=$(jq -nc \
                 --arg bookmark "$bookmark" \
@@ -65,7 +93,8 @@ jobs:
                    current_bookmark:$bookmark}
                 end')
 
-              response=$(curl --fail-with-body \
+              response=$(curl \
+                --fail-with-body \
                 --silent --show-error \
                 --max-time 60 \
                 -X POST \
@@ -75,34 +104,52 @@ jobs:
                 --data "$body")
 
               if [ "$(jq -r '.success' <<< "$response")" != "true" ]; then
-                echo "Cloudflare export request failed for $name"
+                echo "Cloudflare export failed: $name"
+                echo "$response" | jq -c \
+                  '[.errors[]? | {code, message}]'
                 exit 1
               fi
 
-              status=$(jq -r '.result.status // empty' <<< "$response")
+              status=$(jq -r \
+                '.result.status // empty' <<< "$response")
 
               if [ "$status" = "complete" ]; then
-                url=$(jq -r '.result.result.signed_url // empty' <<< "$response")
+                url=$(jq -r \
+                  '.result.result.signed_url // empty' \
+                  <<< "$response")
+
                 test -n "$url"
-                curl --fail --silent --show-error \
+
+                curl \
+                  --fail --silent --show-error \
                   --location --max-time 120 \
                   "$url" --output "$output"
+
                 test -s "$output"
-                sha256sum "$output" > "${output}.sha256"
+
+                (
+                  cd backups
+                  sha256sum "$(basename "$output")" \
+                    > "$(basename "$output").sha256"
+                )
+
                 echo "Export completed: $name"
                 return 0
               fi
 
               if [ "$status" = "error" ]; then
-                echo "Cloudflare reported export error for $name"
+                echo "Cloudflare reported export error: $name"
                 exit 1
               fi
 
-              bookmark=$(jq -r '.result.at_bookmark // empty' <<< "$response")
+              bookmark=$(jq -r \
+                '.result.at_bookmark // empty' \
+                <<< "$response")
+
               sleep 5
             done
 
-            echo "Export timed out for $name"
+            echo "Export timed out: $name"
             exit 1
           }
 
@@ -113,36 +160,53 @@ jobs:
             "638d0520-b56c-4a35-be60-6c819356c893"
 
           cd backups
-          sha256sum -c *.sha256
+          sha256sum -c -- *.sha256
+
+          echo "Both D1 exports completed."
 
       - name: Upload backups to R2
         shell: bash
         run: |
           set -euo pipefail
+
           ENDPOINT="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
 
           for file in backups/*; do
             name=$(basename "$file")
+
             aws s3 cp "$file" \
               "s3://${R2_BUCKET}/daily/${STAMP}/${name}" \
               --endpoint-url "$ENDPOINT" \
               --no-progress
           done
 
+          echo "Backup files uploaded to R2."
+
       - name: Verify uploaded backups
         shell: bash
         run: |
           set -euo pipefail
+
           ENDPOINT="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
 
           for file in backups/*; do
             name=$(basename "$file")
-            aws s3api head-object \
+
+            local_size=$(stat -c %s "$file")
+
+            remote_size=$(aws s3api head-object \
               --bucket "$R2_BUCKET" \
               --key "daily/${STAMP}/${name}" \
               --endpoint-url "$ENDPOINT" \
               --query ContentLength \
-              --output text > /dev/null
+              --output text)
+
+            if [ "$local_size" != "$remote_size" ]; then
+              echo "Size mismatch: $name"
+              exit 1
+            fi
+
+            echo "Verified: $name"
           done
 
-          echo "Both D1 backups uploaded and verified."
+          echo "Both D1 backups uploaded and size-verified."
