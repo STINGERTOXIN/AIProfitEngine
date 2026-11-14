@@ -16,13 +16,13 @@ export async function onRequestPost({request,env}) {
   const insertion=await env.DB.prepare('INSERT OR IGNORE INTO subscribers (email,consent_at,consent_version) VALUES (?, ?, ?)').bind(email,new Date().toISOString(),'early-access-v1').run();
   // Send once for newly inserted subscribers, never for duplicate signups.
   // Email delivery is separate from signup persistence: an email outage must not lose the signup.
-  if (insertion.meta?.changes > 0 && env.RESEND_API_KEY) {
+  if (insertion.meta?.changes > 0 && env.RESEND_API_KEY && env.RESEND_FROM_EMAIL) {
    try {
     const sent=await fetch('https://api.resend.com/emails',{
      method:'POST',
      headers:{'Authorization':`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json'},
      body:JSON.stringify({
-      from:'AI Profit Engine <welcome@aiprofitengine.ai>',
+      from:env.RESEND_FROM_EMAIL,
       to:[email],
       subject:'Welcome to AI Profit Engine',
       text:"Thanks for joining the AI Profit Engine early-access list!\n\nYou're on the list. We're developing practical tools to help small businesses manage inquiries and follow up faster. We'll share updates as the project develops.\n\nYou can learn more at https://aiprofitengine.ai\n\nAI Profit Engine\nAutomate. Earn. Repeat."
@@ -30,13 +30,13 @@ export async function onRequestPost({request,env}) {
     });
     if (!sent.ok) console.error('Resend welcome email failed:',sent.status);
     // Notify the site owner only after a new subscriber has been stored.
-    try {
+    if (sent.ok && env.SUBSCRIBER_NOTIFICATION_EMAIL) try {
      const notice=await fetch('https://api.resend.com/emails',{
       method:'POST',
       headers:{'Authorization':`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json'},
       body:JSON.stringify({
-       from:'AI Profit Engine <welcome@aiprofitengine.ai>',
-       to:['staffnebrian@gmail.com'],
+       from:env.RESEND_FROM_EMAIL,
+       to:[env.SUBSCRIBER_NOTIFICATION_EMAIL],
        subject:'New AI Profit Engine early-access subscriber',
        text:`A new subscriber joined the AI Profit Engine early-access list.\n\nEmail: ${email}\nDate: ${new Date().toISOString()}\n\nView subscribers in your Cloudflare D1 dashboard.`
       })
