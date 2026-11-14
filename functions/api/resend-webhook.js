@@ -37,7 +37,17 @@ export async function onRequestPost({request,env}){
    // Suppress only the matching lead, never unrelated customers.
    await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT lead_id FROM ape_customer_followup_sent WHERE provider_email_id=?)").bind(emailId).run();
   }
-  const matched=(updated.meta?.changes||0)>0;
+  // Business reminders use the same signed webhook, matched only by provider message ID.
+  const businessTable=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ape_reminder_sent'").first();
+  let businessMatched=false;
+  if(businessTable){
+   const businessColumns=(await db.prepare("PRAGMA table_info(ape_reminder_sent)").all()).results||[];
+   if(businessColumns.some(c=>c.name==="provider_email_id")&&businessColumns.some(c=>c.name==="delivery_status")&&businessColumns.some(c=>c.name==="delivery_updated_at")){
+    const businessUpdated=await db.prepare("UPDATE ape_reminder_sent SET delivery_status=?,delivery_updated_at=CURRENT_TIMESTAMP WHERE provider_email_id=? AND (delivery_status IS NULL OR CASE delivery_status WHEN 'delivered' THEN 1 WHEN 'failed' THEN 2 WHEN 'bounced' THEN 3 WHEN 'complained' THEN 4 ELSE 0 END < ?)").bind(status,emailId,priority[status]).run();
+    businessMatched=(businessUpdated.meta?.changes||0)>0;
+   }
+  }
+  const matched=(updated.meta?.changes||0)>0||businessMatched;
   // Log only event type and match outcome; do not log email addresses, secrets, or payloads.
   // A valid repeated or out-of-order event may be unmatched because its status is already recorded.
   console.info("Resend webhook processed",{eventType:event.type,updated:matched});
