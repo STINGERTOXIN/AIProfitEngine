@@ -1,0 +1,68 @@
+name: APE Backup Recovery Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_stamp:
+        description: "Exact UTC backup folder name in R2 daily/"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_BUCKET: ape-d1-backups
+      BACKUP_STAMP: ${{ inputs.backup_stamp }}
+    steps:
+      - name: Validate input and credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BACKUP_STAMP" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z$ ]] || { echo "Invalid backup timestamp format"; exit 1; }
+          test -n "$CF_ACCOUNT"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          command -v sqlite3
+          command -v aws
+
+      - name: Download and checksum both backups
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p backups
+          ENDPOINT="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
+          for name in ape-subscribers ai-profit-engine-db; do
+            for suffix in sql sql.sha256; do
+              file="${name}-${BACKUP_STAMP}.${suffix}"
+              aws s3 cp "s3://${R2_BUCKET}/daily/${BACKUP_STAMP}/${file}" "backups/${file}" --endpoint-url "$ENDPOINT" --no-progress --only-show-errors
+            done
+          done
+          (cd backups && sha256sum -c -- *.sha256)
+          echo "Downloaded backups match their checksums."
+
+      - name: Restore into temporary local SQLite databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p restored
+          for name in ape-subscribers ai-profit-engine-db; do
+            sql="backups/${name}-${BACKUP_STAMP}.sql"
+            db="restored/${name}.sqlite"
+            test -s "$sql"
+            sqlite3 -bail "$db" ".read $sql"
+            integrity=$(sqlite3 "$db" 'PRAGMA integrity_check;')
+            test "$integrity" = "ok" || { echo "Integrity check failed for $name"; exit 1; }
+            tables=$(sqlite3 "$db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            echo "$name restored; application table count: $tables; integrity: ok"
+          done
+          echo "Both backups restored successfully to isolated temporary SQLite databases."
