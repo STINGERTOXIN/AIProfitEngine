@@ -1,0 +1,78 @@
+name: APE Monthly Backup Recovery Verification
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 10 1 * *"
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: ape-monthly-recovery
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_BUCKET: ape-d1-backups
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Find newest complete snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CF_ACCOUNT"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          python3 - <<'PY'
+          import subprocess,json,os,re
+          endpoint=f"https://{os.environ['CF_ACCOUNT']}.r2.cloudflarestorage.com"
+          data=json.loads(subprocess.check_output(["aws","s3api","list-objects-v2","--bucket",os.environ["R2_BUCKET"],"--prefix","daily/","--endpoint-url",endpoint,"--output","json"],text=True))
+          groups={}
+          for obj in data.get("Contents",[]):
+              m=re.fullmatch(r"daily/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)/([^/]+)",obj["Key"])
+              if m: groups.setdefault(m.group(1),set()).add(m.group(2))
+          for stamp in sorted(groups,reverse=True):
+              expected={f"{name}-{stamp}.{ext}" for name in ("ape-subscribers","ai-profit-engine-db") for ext in ("sql","sql.sha256")}
+              if expected<=groups[stamp]:
+                  with open(os.environ["GITHUB_ENV"],"a") as f: f.write(f"BACKUP_STAMP={stamp}\n")
+                  print("Selected snapshot:",stamp)
+                  break
+          else: raise SystemExit("No complete four-file backup snapshot found")
+          PY
+      - name: Download and verify backup files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p backups
+          endpoint="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
+          for name in ape-subscribers ai-profit-engine-db; do
+            for ext in sql sql.sha256; do
+              file="${name}-${BACKUP_STAMP}.${ext}"
+              aws s3 cp "s3://${R2_BUCKET}/daily/${BACKUP_STAMP}/${file}" "backups/${file}" --endpoint-url "$endpoint" --no-progress --only-show-errors
+            done
+          done
+          (cd backups && sha256sum -c -- *.sha256)
+      - name: Restore into isolated SQLite databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p restored
+          for name in ape-subscribers ai-profit-engine-db; do
+            sql="backups/${name}-${BACKUP_STAMP}.sql"
+            db="restored/${name}.sqlite"
+            sqlite3 -bail "$db" ".read $sql"
+            test "$(sqlite3 "$db" 'PRAGMA integrity_check;')" = ok
+            echo "$name: restored; integrity ok"
+          done
+      - name: Create GitHub issue if verification fails
+        if: ${{ failure() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "APE ALERT: monthly backup recovery test failed" --body "Recovery verification failed. Check workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID . Do not delete backups until investigated."

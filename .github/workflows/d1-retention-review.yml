@@ -1,0 +1,43 @@
+name: APE R2 Backup Retention Review
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 9 * * *"
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_BUCKET: ape-d1-backups
+    steps:
+      - name: Review backups older than 30 days (dry run; no deletion)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CF_ACCOUNT"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          python3 - <<'PY'
+          import os, subprocess, json, datetime, re
+          endpoint=f"https://{os.environ['CF_ACCOUNT']}.r2.cloudflarestorage.com"
+          cmd=["aws","s3api","list-objects-v2","--bucket",os.environ["R2_BUCKET"],"--prefix","daily/","--endpoint-url",endpoint,"--output","json"]
+          data=json.loads(subprocess.check_output(cmd,text=True))
+          cutoff=datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=30)
+          old=[]
+          for obj in data.get("Contents",[]):
+              key=obj["Key"]
+              m=re.fullmatch(r"daily/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)/[^/]+",key)
+              if not m: continue
+              stamp=datetime.datetime.strptime(m.group(1),"%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=datetime.timezone.utc)
+              if stamp<cutoff: old.append(key)
+          print(f"DRY RUN: {len(old)} objects older than 30 days. No objects deleted.")
+          for key in old[:100]: print("Would delete:",key)
+          if len(old)>100: print("Additional objects omitted from log.")
+          PY
