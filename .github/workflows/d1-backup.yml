@@ -3,23 +3,146 @@ name: APE Daily D1 Backup
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "15 8 * * *"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ape-d1-backup
+  cancel-in-progress: false
+
 jobs:
   backup:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_BUCKET: ape-d1-backups
+
     steps:
       - name: Check backup configuration
-        env:
-          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          R2_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        shell: bash
         run: |
-          test -n "$CF_TOKEN"
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CF_ACCOUNT"
-          test -n "$R2_KEY"
-          test -n "$R2_SECRET"
-          echo "Backup credentials are configured."
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          echo "Backup credentials configured."
+
+      - name: Export both D1 databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p backups
+          STAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+
+          export_db() {
+            local name="$1"
+            local id="$2"
+            local bookmark=""
+            local response=""
+            local status=""
+            local url=""
+            local output="backups/${name}-${STAMP}.sql"
+
+            for attempt in $(seq 1 60); do
+              body=$(jq -nc \
+                --arg bookmark "$bookmark" \
+                'if $bookmark == "" then
+                  {output_format:"polling"}
+                else
+                  {output_format:"polling",
+                   current_bookmark:$bookmark}
+                end')
+
+              response=$(curl --fail-with-body \
+                --silent --show-error \
+                --max-time 60 \
+                -X POST \
+                "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/d1/database/${id}/export" \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data "$body")
+
+              if [ "$(jq -r '.success' <<< "$response")" != "true" ]; then
+                echo "Cloudflare export request failed for $name"
+                exit 1
+              fi
+
+              status=$(jq -r '.result.status // empty' <<< "$response")
+
+              if [ "$status" = "complete" ]; then
+                url=$(jq -r '.result.result.signed_url // empty' <<< "$response")
+                test -n "$url"
+                curl --fail --silent --show-error \
+                  --location --max-time 120 \
+                  "$url" --output "$output"
+                test -s "$output"
+                sha256sum "$output" > "${output}.sha256"
+                echo "Export completed: $name"
+                return 0
+              fi
+
+              if [ "$status" = "error" ]; then
+                echo "Cloudflare reported export error for $name"
+                exit 1
+              fi
+
+              bookmark=$(jq -r '.result.at_bookmark // empty' <<< "$response")
+              sleep 5
+            done
+
+            echo "Export timed out for $name"
+            exit 1
+          }
+
+          export_db "ape-subscribers" \
+            "eeab6085-c6da-4231-baff-41edb50b4ac1"
+
+          export_db "ai-profit-engine-db" \
+            "638d0520-b56c-4a35-be60-6c819356c893"
+
+          cd backups
+          sha256sum -c *.sha256
+
+      - name: Upload backups to R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
+
+          for file in backups/*; do
+            name=$(basename "$file")
+            aws s3 cp "$file" \
+              "s3://${R2_BUCKET}/daily/${STAMP}/${name}" \
+              --endpoint-url "$ENDPOINT" \
+              --no-progress
+          done
+
+      - name: Verify uploaded backups
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${CF_ACCOUNT}.r2.cloudflarestorage.com"
+
+          for file in backups/*; do
+            name=$(basename "$file")
+            aws s3api head-object \
+              --bucket "$R2_BUCKET" \
+              --key "daily/${STAMP}/${name}" \
+              --endpoint-url "$ENDPOINT" \
+              --query ContentLength \
+              --output text > /dev/null
+          done
+
+          echo "Both D1 backups uploaded and verified."
