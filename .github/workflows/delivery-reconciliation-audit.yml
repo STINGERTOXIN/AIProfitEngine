@@ -50,6 +50,7 @@ jobs:
               --request POST --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
               "https://aiprofitengine.ai/api/delivery-audit")
           fi
+          echo "Audit mode: $([ "$DRY_RUN" = "true" ] && echo "SIMULATION" || echo "PRODUCTION")"
           RESPONSE="$response" python3 - <<'PY'
           import json,os,sys
           try:
@@ -57,11 +58,15 @@ jobs:
               fields=("total","pendingUnresolved","missingProviderId","deliveryUnconfirmed","negativeDelivery")
               if data.get("ok") is not True or any(type(data.get(k)) is not int or data[k]<0 for k in fields):
                   raise ValueError("Invalid audit result")
+              if any(data[k] > data["total"] for k in fields[1:]):
+                  raise ValueError("Audit count exceeds total records")
               needs_review=any(data[k]>0 for k in fields[1:])
               if data.get("needsReview") is not needs_review:
                   raise ValueError("Inconsistent audit result")
               with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
                   f.write("## A.P.E. delivery reconciliation audit\n\n")
+                  mode = "SIMULATION — no production API request" if os.environ.get("DRY_RUN") == "true" else "PRODUCTION — live API response"
+                  f.write(f"**Mode:** {mode}\n\n")
                   f.write("| Metric | Count |\n|---|---:|\n")
                   for k in fields:f.write(f"| {k} | {data[k]} |\n")
               with open(os.environ["GITHUB_OUTPUT"],"a") as f:
