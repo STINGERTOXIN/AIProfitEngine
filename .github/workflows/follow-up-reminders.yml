@@ -9,6 +9,11 @@ on:
         type: boolean
         default: true
         required: true
+      test_failure_alert:
+        description: 'In dry run only, simulate a failed send to test GitHub incident creation'
+        type: boolean
+        default: false
+        required: true
 concurrency:
   group: ape-follow-up-reminders
   cancel-in-progress: false
@@ -23,7 +28,12 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "DRY RUN: using a synthetic success response; no reminder API call"
-            response='{"ok":true,"checked":0,"sent":0,"failed":0,"customerChecked":0,"customerSent":0,"customerFailed":0,"customerEnabled":false}'
+            if [ "${{ inputs.test_failure_alert }}" = "true" ]; then
+              echo "DRY RUN: simulating one failed reminder to verify incident reporting; no API call"
+              response='{"ok":true,"checked":1,"sent":0,"failed":1,"customerChecked":0,"customerSent":0,"customerFailed":0,"customerEnabled":false}'
+            else
+              response='{"ok":true,"checked":0,"sent":0,"failed":0,"customerChecked":0,"customerSent":0,"customerFailed":0,"customerEnabled":false}'
+            fi
           else
             if [ -z "$REMINDER_CRON_SECRET" ]; then
               echo "::error::REMINDER_CRON_SECRET repository secret is missing"
