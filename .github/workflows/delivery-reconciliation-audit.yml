@@ -9,6 +9,11 @@ on:
         type: boolean
         required: true
         default: true
+      test_issue_alert:
+        description: 'Dry run only: simulate one unresolved record and test incident creation'
+        type: boolean
+        required: true
+        default: false
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -21,12 +26,22 @@ jobs:
         env:
           REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          TEST_ISSUE_ALERT: ${{ github.event_name == 'workflow_dispatch' && inputs.test_issue_alert }}
         run: |
           set -euo pipefail
           if [ "$DRY_RUN" = "true" ]; then
             echo "DRY RUN: no production API request"
-            response='{"ok":true,"total":4,"pendingUnresolved":0,"missingProviderId":0,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":false}'
+            if [ "$TEST_ISSUE_ALERT" = "true" ]; then
+              echo "DRY RUN: simulating one missing provider ID; no production API request"
+              response='{"ok":true,"total":4,"pendingUnresolved":0,"missingProviderId":1,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":true}'
+            else
+              response='{"ok":true,"total":4,"pendingUnresolved":0,"missingProviderId":0,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":false}'
+            fi
           else
+            if [ "$TEST_ISSUE_ALERT" = "true" ]; then
+              echo "::error::test_issue_alert requires dry_run=true; refusing to call production"
+              exit 1
+            fi
             if [ -z "$REMINDER_CRON_SECRET" ]; then
               echo "::error::Missing REMINDER_CRON_SECRET"
               exit 1
@@ -62,13 +77,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEST_ISSUE_ALERT: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.test_issue_alert }}
         run: |
           set -euo pipefail
           title="A.P.E. unresolved email delivery records"
+          if [ "$TEST_ISSUE_ALERT" = "true" ]; then title="TEST: A.P.E. unresolved email delivery records"; fi
           existing=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "A.P.E. unresolved email delivery records") | .number' | head -n 1)
           body="Delivery reconciliation requires investigation: $RUN_URL
 
           Review the run summary and verify against Resend before changing any D1 records. Never blindly resend uncertain outcomes."
+          if [ "$TEST_ISSUE_ALERT" = "true" ]; then
+            body="SYNTHETIC DRY-RUN TEST ONLY. No production data was read or modified, and no emails were sent.\n\n$body"
+          fi
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
