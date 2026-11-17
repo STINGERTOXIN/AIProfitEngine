@@ -82,12 +82,12 @@ jobs:
           set -euo pipefail
           title="A.P.E. unresolved email delivery records"
           if [ "$TEST_ISSUE_ALERT" = "true" ]; then title="TEST: A.P.E. unresolved email delivery records"; fi
-          existing=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "A.P.E. unresolved email delivery records") | .number' | head -n 1)
+          existing=$(gh issue list --state open --limit 100 --json number,title | jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -n 1)
           body="Delivery reconciliation requires investigation: $RUN_URL
 
           Review the run summary and verify against Resend before changing any D1 records. Never blindly resend uncertain outcomes."
           if [ "$TEST_ISSUE_ALERT" = "true" ]; then
-            body="SYNTHETIC DRY-RUN TEST ONLY. No production data was read or modified, and no emails were sent.\n\n$body"
+            body=$(printf "SYNTHETIC DRY-RUN TEST ONLY. No production data was read or modified, and no emails were sent.\n\n%s" "$body")
           fi
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
