@@ -14,6 +14,9 @@ on:
         type: boolean
         required: true
         default: false
+concurrency:
+  group: ape-delivery-reconciliation-audit
+  cancel-in-progress: false
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -46,7 +49,7 @@ jobs:
               echo "::error::Missing REMINDER_CRON_SECRET"
               exit 1
             fi
-            response=$(curl --fail-with-body --silent --show-error --retry 2 --max-time 30 \
+            response=$(curl --fail-with-body --silent --show-error --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 30 \
               --request POST --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
               "https://aiprofitengine.ai/api/delivery-audit")
           fi
