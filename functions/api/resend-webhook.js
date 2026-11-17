@@ -31,16 +31,25 @@ export async function onRequestPost({request,env}){
   if(!columns.some(c=>c.name==="provider_email_id"))return json({error:"Message ID tracking not deployed"},503);
   if(!columns.some(c=>c.name==="delivery_status"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN delivery_status TEXT").run();
   if(!columns.some(c=>c.name==="delivery_updated_at"))await db.prepare("ALTER TABLE ape_customer_followup_sent ADD COLUMN delivery_updated_at TEXT").run();
+  // The provider can deliver a webhook before the send request has stored its email ID.
+  // Do not acknowledge an unknown ID as processed; request provider retry instead.
+  // A known ID with an already-recorded or higher-priority status remains idempotent.
+  const known=await db.prepare("SELECT 1 AS found FROM ape_customer_followup_sent WHERE provider_email_id=? LIMIT 1").bind(emailId).first();
+  if(!known){
+   console.warn("Resend webhook unmatched provider ID; requesting retry",{eventType:event.type});
+   return json({error:"Delivery record not yet available"},503);
+  }
   // Terminal negative events take precedence over later/out-of-order delivery notifications.
   const updated=await db.prepare("UPDATE ape_customer_followup_sent SET delivery_status=?,delivery_updated_at=CURRENT_TIMESTAMP WHERE provider_email_id=? AND (delivery_status IS NULL OR CASE delivery_status WHEN 'delivered' THEN 1 WHEN 'failed' THEN 2 WHEN 'bounced' THEN 3 WHEN 'complained' THEN 4 ELSE 0 END < ?)").bind(status,emailId,priority[status]).run();
   if(["bounced","complained"].includes(status)){
    // Suppress only the matching lead, never unrelated customers.
    await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT lead_id FROM ape_customer_followup_sent WHERE provider_email_id=?)").bind(emailId).run();
   }
-  const matched=(updated.meta?.changes||0)>0;
+  const matched=true;
+  const changed=(updated.meta?.changes||0)>0;
   // Log only event type and match outcome; do not log email addresses, secrets, or payloads.
   // A valid repeated or out-of-order event may be unmatched because its status is already recorded.
-  console.info("Resend webhook processed",{eventType:event.type,updated:matched});
+  console.info("Resend webhook processed",{eventType:event.type,updated:changed});
   return json({ok:true,matched});
  }catch(error){console.error("Resend webhook storage failure",String(error));return json({error:"Webhook processing unavailable"},503)}
 }
