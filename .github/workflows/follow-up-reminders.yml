@@ -26,13 +26,13 @@ jobs:
             response='{"ok":true,"checked":0,"sent":0,"failed":0,"customerChecked":0,"customerSent":0,"customerFailed":0,"customerEnabled":false}'
           else
             if [ -z "$REMINDER_CRON_SECRET" ]; then
-            echo "::error::REMINDER_CRON_SECRET repository secret is missing"
+              echo "::error::REMINDER_CRON_SECRET repository secret is missing"
               exit 1
             fi
             response=$(curl --fail-with-body --show-error --silent --retry 2 --retry-delay 2 --max-time 30 \
-            --request POST \
-            --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
-            "https://aiprofitengine.ai/api/follow-up-reminders")
+              --request POST \
+              --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
+              "https://aiprofitengine.ai/api/follow-up-reminders")
           fi
           RESPONSE="$response" python3 - <<'PY'
           import json
