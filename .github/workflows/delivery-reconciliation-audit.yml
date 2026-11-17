@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           if [ "$DRY_RUN" = "true" ]; then
             echo "DRY RUN: no production API request"
-            response='{"ok":true,"total":4,"stalePending":0,"missingProviderId":0,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":false}'
+            response='{"ok":true,"total":4,"pendingUnresolved":0,"missingProviderId":0,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":false}'
           else
             if [ -z "$REMINDER_CRON_SECRET" ]; then
               echo "::error::Missing REMINDER_CRON_SECRET"
@@ -39,18 +39,18 @@ jobs:
           import json,os,sys
           try:
               data=json.loads(os.environ["RESPONSE"])
-              fields=("total","stalePending","missingProviderId","deliveryUnconfirmed","negativeDelivery")
+              fields=("total","pendingUnresolved","missingProviderId","deliveryUnconfirmed","negativeDelivery")
               if data.get("ok") is not True or any(type(data.get(k)) is not int or data[k]<0 for k in fields):
                   raise ValueError("Invalid audit result")
               needs_review=any(data[k]>0 for k in fields[1:])
               if data.get("needsReview") is not needs_review:
                   raise ValueError("Inconsistent audit result")
               with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
-                  f.write("## A.P.E. delivery reconciliation audit\\n\\n")
-                  f.write("| Metric | Count |\\n|---|---:|\\n")
-                  for k in fields:f.write(f"| {k} | {data[k]} |\\n")
+                  f.write("## A.P.E. delivery reconciliation audit\n\n")
+                  f.write("| Metric | Count |\n|---|---:|\n")
+                  for k in fields:f.write(f"| {k} | {data[k]} |\n")
               with open(os.environ["GITHUB_OUTPUT"],"a") as f:
-                  f.write(f"needs_review={str(needs_review).lower()}\\n")
+                  f.write(f"needs_review={str(needs_review).lower()}\n")
               print("Delivery audit:",", ".join(f"{k}={data[k]}" for k in fields))
           except (KeyError,ValueError,TypeError) as e:
               print("::error::Delivery audit response invalid:",str(e))
