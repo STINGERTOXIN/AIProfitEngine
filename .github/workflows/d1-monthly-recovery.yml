@@ -1,6 +1,12 @@
 name: APE Monthly Backup Recovery Verification
 on:
   workflow_dispatch:
+    inputs:
+      test_failure_alert:
+        description: 'Simulate a failed verification to test incident reporting; skips all R2 and restore operations'
+        type: boolean
+        default: false
+        required: true
   schedule:
     - cron: "30 10 1 * *"
 permissions:
@@ -22,6 +28,11 @@ jobs:
       R2_BUCKET: ape-d1-backups
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Simulate recovery failure (manual test only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_failure_alert == true }}
+        run: |
+          echo '::error::TEST ONLY: simulated recovery verification failure; no backup files or databases touched'
+          exit 1
       - name: Find newest complete snapshot
         shell: bash
         run: |
