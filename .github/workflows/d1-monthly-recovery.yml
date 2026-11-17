@@ -75,4 +75,11 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "APE ALERT: monthly backup recovery test failed" --body "Recovery verification failed. Check workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID . Do not delete backups until investigated."
+          title="APE ALERT: monthly backup recovery test failed"
+          body="Recovery verification failed. Check workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID . Do not delete backups until investigated."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title | jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -n 1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
