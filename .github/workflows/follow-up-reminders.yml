@@ -3,6 +3,12 @@ on:
   schedule:
     - cron: '0 15 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Validate response handling without calling the reminder API or sending emails'
+        type: boolean
+        default: true
+        required: true
 concurrency:
   group: ape-follow-up-reminders
   cancel-in-progress: false
@@ -15,14 +21,19 @@ jobs:
         env:
           REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
         run: |
-          if [ -z "$REMINDER_CRON_SECRET" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "DRY RUN: using a synthetic success response; no reminder API call"
+            response='{"ok":true,"checked":0,"sent":0,"failed":0,"customerChecked":0,"customerSent":0,"customerFailed":0,"customerEnabled":false}'
+          else
+            if [ -z "$REMINDER_CRON_SECRET" ]; then
             echo "::error::REMINDER_CRON_SECRET repository secret is missing"
-            exit 1
-          fi
-          response=$(curl --fail-with-body --show-error --silent --retry 2 --retry-delay 2 --max-time 30 \
+              exit 1
+            fi
+            response=$(curl --fail-with-body --show-error --silent --retry 2 --retry-delay 2 --max-time 30 \
             --request POST \
             --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
             "https://aiprofitengine.ai/api/follow-up-reminders")
+          fi
           RESPONSE="$response" python3 - <<'PY'
           import json
           import os
