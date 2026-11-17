@@ -219,4 +219,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "APE ALERT: daily D1 backup failed" --body "Daily D1 backup failed. Review the workflow logs: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID . Confirm the last good backup in R2."
+          set -euo pipefail
+          title="APE ALERT: daily D1 backup failed"
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="Daily D1 backup failed. Review the workflow logs: $run_url. Confirm the last good backup in R2."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title | jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -n 1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
