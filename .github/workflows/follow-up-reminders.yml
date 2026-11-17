@@ -6,16 +6,39 @@ on:
 jobs:
   send-reminders:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Run secured reminder check
         env:
           REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
         run: |
           if [ -z "$REMINDER_CRON_SECRET" ]; then
-            echo "REMINDER_CRON_SECRET repository secret is missing"
+            echo "::error::REMINDER_CRON_SECRET repository secret is missing"
             exit 1
           fi
-          curl --fail-with-body --show-error --silent --retry 2 \
+          response=$(curl --fail-with-body --show-error --silent --retry 2 --retry-delay 2 --max-time 30 \
             --request POST \
             --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
-            "https://aiprofitengine.ai/api/follow-up-reminders"
+            "https://aiprofitengine.ai/api/follow-up-reminders")
+          RESPONSE="$response" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          try:
+              data = json.loads(os.environ["RESPONSE"])
+          except (ValueError, KeyError):
+              print("::error::Reminder endpoint returned invalid JSON")
+              sys.exit(1)
+
+          fields = ("checked", "sent", "failed", "customerChecked", "customerSent", "customerFailed")
+          if data.get("ok") is not True or any(type(data.get(k)) is not int or data[k] < 0 for k in fields):
+              print("::error::Reminder endpoint returned an invalid or unsuccessful result")
+              sys.exit(1)
+
+          print("Reminder summary: " + ", ".join(f"{k}={data[k]}" for k in fields))
+          print(f"Customer follow-ups enabled: {data.get('customerEnabled') is True}")
+          if data["failed"] or data["customerFailed"]:
+              print("::error::One or more reminder sends failed; review Cloudflare logs")
+              sys.exit(1)
+          PY
