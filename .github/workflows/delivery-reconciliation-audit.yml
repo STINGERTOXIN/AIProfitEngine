@@ -1,0 +1,90 @@
+name: APE delivery reconciliation audit
+on:
+  schedule:
+    - cron: '45 15 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Check parsing and summary without calling production'
+        type: boolean
+        required: true
+        default: true
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Read delivery reconciliation counters
+        id: audit
+        env:
+          REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN: no production API request"
+            response='{"ok":true,"total":4,"pendingUnresolved":0,"missingProviderId":0,"deliveryUnconfirmed":0,"negativeDelivery":0,"needsReview":false}'
+          else
+            if [ -z "$REMINDER_CRON_SECRET" ]; then
+              echo "::error::Missing REMINDER_CRON_SECRET"
+              exit 1
+            fi
+            response=$(curl --fail-with-body --silent --show-error --retry 2 --max-time 30 \
+              --request POST --header "Authorization: Bearer $REMINDER_CRON_SECRET" \
+              "https://aiprofitengine.ai/api/delivery-audit")
+          fi
+          RESPONSE="$response" python3 - <<'PY'
+          import json,os,sys
+          try:
+              data=json.loads(os.environ["RESPONSE"])
+              fields=("total","pendingUnresolved","missingProviderId","deliveryUnconfirmed","negativeDelivery")
+              if data.get("ok") is not True or any(type(data.get(k)) is not int or data[k]<0 for k in fields):
+                  raise ValueError("Invalid audit result")
+              needs_review=any(data[k]>0 for k in fields[1:])
+              if data.get("needsReview") is not needs_review:
+                  raise ValueError("Inconsistent audit result")
+              with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+                  f.write("## A.P.E. delivery reconciliation audit\n\n")
+                  f.write("| Metric | Count |\n|---|---:|\n")
+                  for k in fields:f.write(f"| {k} | {data[k]} |\n")
+              with open(os.environ["GITHUB_OUTPUT"],"a") as f:
+                  f.write(f"needs_review={str(needs_review).lower()}\n")
+              print("Delivery audit:",", ".join(f"{k}={data[k]}" for k in fields))
+          except (KeyError,ValueError,TypeError) as e:
+              print("::error::Delivery audit response invalid:",str(e))
+              sys.exit(1)
+          PY
+      - name: Open or update unresolved delivery issue
+        if: ${{ steps.audit.outputs.needs_review == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="A.P.E. unresolved email delivery records"
+          existing=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "A.P.E. unresolved email delivery records") | .number' | head -n 1)
+          body="Delivery reconciliation requires investigation: $RUN_URL
+
+          Review the run summary and verify against Resend before changing any D1 records. Never blindly resend uncertain outcomes."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+      - name: Open or update audit failure issue
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="A.P.E. delivery audit failed"
+          existing=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "A.P.E. delivery audit failed") | .number' | head -n 1)
+          body="Delivery audit failed: $RUN_URL. Check endpoint deployment, secret, and logs; no emails were sent."
+          if [ -n "$existing" ]; then gh issue comment "$existing" --body "$body"
+          else gh issue create --title "$title" --body "$body"
+          fi
