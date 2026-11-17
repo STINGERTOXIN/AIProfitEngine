@@ -22,7 +22,7 @@ export async function onRequestPost({request,env}){
  let event;try{event=JSON.parse(raw)}catch{return json({error:"Invalid JSON"},400)}
  const status=eventStatuses[event?.type];if(!status)return json({ok:true,ignored:true});
  const emailId=event?.data?.email_id;
- if(typeof emailId!=="string"||emailId.length>150)return json({ok:true,ignored:true});
+ if(typeof emailId!=="string"||!emailId.trim()||emailId.length>150)return json({ok:true,ignored:true});
  const db=env.DB;
  try{
   const table=(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ape_customer_followup_sent'").first());
@@ -37,11 +37,13 @@ export async function onRequestPost({request,env}){
    // Suppress only the matching lead, never unrelated customers.
    await db.prepare("UPDATE ape_leads SET email_opt_in=0,email_unsubscribed=1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT lead_id FROM ape_customer_followup_sent WHERE provider_email_id=?)").bind(emailId).run();
   }
-  const matched=(updated.meta?.changes||0)>0;
-  // Log only event type and match outcome; do not log email addresses, secrets, or payloads.
-  // A valid repeated or out-of-order event may be unmatched because its status is already recorded.
-  console.info("Resend webhook processed",{eventType:event.type,updated:matched});
-  return json({ok:true,matched});
+  const changed=(updated.meta?.changes||0)>0;
+  // A repeated or out-of-order webhook can be known without changing any rows.
+  // Do not expose provider IDs, email addresses, signatures, or payloads in logs.
+  const known=changed?true:!!(await db.prepare("SELECT 1 AS found FROM ape_customer_followup_sent WHERE provider_email_id=? LIMIT 1").bind(emailId).first());
+  console.info("Resend webhook processed",{eventType:event.type,matched:known,updated:changed});
+  if(!known)console.warn("Resend webhook has no matching customer follow-up record",{eventType:event.type});
+  return json({ok:true,matched:known,updated:changed});
  }catch(error){console.error("Resend webhook storage failure",String(error));return json({error:"Webhook processing unavailable"},503)}
 }
 export async function onRequestGet(){return json({error:"Method not allowed"},405)}
