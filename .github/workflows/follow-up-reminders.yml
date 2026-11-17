@@ -41,11 +41,11 @@ jobs:
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as summary:
-                  summary.write("## A.P.E. reminder check\\n\\n")
-                  summary.write("| Metric | Count |\\n|---|---:|\\n")
+                  summary.write("## A.P.E. reminder check\n\n")
+                  summary.write("| Metric | Count |\n|---|---:|\n")
                   for key in fields:
-                      summary.write(f"| {key} | {data[key]} |\\n")
-                  summary.write(f"\\nCustomer follow-ups enabled: {data.get('customerEnabled') is True}\\n")
+                      summary.write(f"| {key} | {data[key]} |\n")
+                  summary.write(f"\nCustomer follow-ups enabled: {data.get('customerEnabled') is True}\n")
           if data["failed"] or data["customerFailed"]:
               print("::error::One or more reminder sends failed; review Cloudflare logs")
               sys.exit(1)
