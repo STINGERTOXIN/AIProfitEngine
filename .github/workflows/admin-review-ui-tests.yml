@@ -1,0 +1,24 @@
+name: APE Admin Review UI Tests
+
+on:
+  pull_request:
+    paths:
+      - 'dashboard.html'
+      - 'tests/admin-review-ui.test.cjs'
+      - '.github/workflows/admin-review-ui-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run isolated admin review UI tests
+        run: node --test tests/admin-review-ui.test.cjs
