@@ -112,7 +112,9 @@ export async function onRequestPost({request, env}) {
       return reply({error:'Request too large.'}, 413);
     const raw = await request.text();
     if (raw.length > 2048) return reply({error:'Request too large.'}, 413);
-    const body = JSON.parse(raw);
+    let body;
+    try { body = JSON.parse(raw); }
+    catch { return reply({error:'Invalid JSON request.'}, 400); }
     const id = body?.id;
     const status = body?.status;
     if (!Number.isSafeInteger(id) || id <= 0 || !['approved','rejected'].includes(status))
