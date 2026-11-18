@@ -516,3 +516,47 @@ test('streamed oversized POST without Content-Length rejects before D1 or email'
     assert.equal(emailCalls, 0);
   } finally { globalThis.fetch = previousFetch; }
 });
+
+
+test('stalled authenticated POST body times out without database writes or email', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousTimeout = AbortSignal.timeout;
+  const keepAlive = setInterval(() => {}, 20);
+  let dbCalls = 0;
+  let emailCalls = 0;
+  let cancelled = false;
+  AbortSignal.timeout = () => previousTimeout(35);
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) { emailCalls++; throw Error('No email'); }
+    return Response.json({ keys: [jwk] });
+  };
+  try {
+    const body = new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"id":')); },
+      cancel() { cancelled = true; }
+    });
+    const request = new Request('https://preview.example.invalid/api/admin/subscribers', {
+      method: 'POST', duplex: 'half',
+      headers: {
+        'Cf-Access-Jwt-Assertion': jwt(),
+        'Content-Type': 'application/json',
+        Origin: 'https://preview.example.invalid'
+      },
+      body
+    });
+    const started = Date.now();
+    const response = await onRequestPost({
+      request,
+      env: { ...env, DB: { prepare() { dbCalls++; throw Error('No DB writes'); } } }
+    });
+    assert.equal(response.status, 413);
+    assert.ok(Date.now() - started < 1000, 'stalled request must not hang');
+    assert.equal(cancelled, true);
+    assert.equal(dbCalls, 0);
+    assert.equal(emailCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    AbortSignal.timeout = previousTimeout;
+    clearInterval(keepAlive);
+  }
+});
