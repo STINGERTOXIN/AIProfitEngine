@@ -49,15 +49,24 @@ async function authorized(request, env) {
   // Never follow redirects when fetching Cloudflare Access signing keys.
   if (certResponse.status >= 300 && certResponse.status < 400) return false;
   if (!certResponse.ok) return false;
-  const keys = await certResponse.json();
-  const jwk = (Array.isArray(keys.keys) ? keys.keys : []).find(key =>
-    key.kid === header.kid && key.kty === 'RSA' &&
-    (!key.alg || key.alg === 'RS256') && (!key.use || key.use === 'sig'));
-  if (!jwk) return false;
-  const key = await crypto.subtle.importKey('jwk', jwk,
-    {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
-  return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key,
-    decode64url(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
+  // Treat malformed, oversized, or unusable JWKS as an authentication failure.
+  // No database access occurs unless a valid signing key verifies the assertion.
+  try {
+    const rawKeys = await certResponse.text();
+    if (rawKeys.length > 65536) return false;
+    const keys = JSON.parse(rawKeys);
+    if (!keys || !Array.isArray(keys.keys)) return false;
+    const jwk = keys.keys.find(key =>
+      key && key.kid === header.kid && key.kty === 'RSA' &&
+      (!key.alg || key.alg === 'RS256') && (!key.use || key.use === 'sig'));
+    if (!jwk) return false;
+    const key = await crypto.subtle.importKey('jwk', jwk,
+      {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
+    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key,
+      decode64url(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
+  } catch {
+    return false;
+  }
 }
 export async function onRequestGet({request, env}) {
   if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true')
