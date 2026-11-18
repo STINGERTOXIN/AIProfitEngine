@@ -161,10 +161,26 @@ export async function onRequestPost({request, env}) {
     const status = body?.status;
     if (!Number.isSafeInteger(id) || id <= 0 || !['approved','rejected'].includes(status))
       return reply({error:'Invalid application or status.'}, 400);
-    const result = await env.DB.prepare(
-      "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
-    ).bind(status, id).run();
-    if (result.meta?.changes !== 1) return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
+    // Fail closed until the audit migration is applied and explicitly enabled.
+    // Do not permit unaudited application decisions during rollout.
+    if (env.ADMIN_REVIEW_AUDIT_ENABLED !== 'true')
+      return reply({error:'Application review temporarily unavailable pending audit verification.'}, 503);
+    // D1 batch executes on one SQLite connection in a transaction. The second
+    // statement observes changes() from the conditional UPDATE, so it writes
+    // an audit event only for a successful pending-to-final transition.
+    // An INSERT error rolls the entire batch back, including the UPDATE.
+    const [transition, audit] = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
+      ).bind(status, id),
+      env.DB.prepare(
+        "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status) SELECT ?, ?, 'pending', ? WHERE changes() = 1"
+      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status)
+    ]);
+    if (transition.meta?.changes !== 1)
+      return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
+    if (audit.meta?.changes !== 1)
+      throw Error('Audit event was not recorded; review transaction cannot be confirmed.');
     // Send a transactional decision notice only after the database update succeeds.
     // Email delivery requires a verified Resend sender configured as RESEND_FROM_EMAIL.
     let email = {sent:false, reason:'Email notification is not configured.'};
