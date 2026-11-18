@@ -108,7 +108,7 @@ async function authorized(request, env) {
 export async function onRequestGet({request, env}) {
   if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true')
     return reply({error:'Subscriber administration temporarily unavailable pending security verification.'}, 503);
-  if (!env.DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
+  if (!env.DB || !env.BUSINESS_DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
     return reply({error:'Subscriber administration is not fully configured.'}, 503);
   try {
     if (!await authorized(request, env))
@@ -119,7 +119,7 @@ export async function onRequestGet({request, env}) {
         SUM(CASE WHEN created_at >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS last30
         FROM subscribers`).first(),
       env.DB.prepare('SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC, id DESC LIMIT 100').all(),
-      env.DB.prepare('SELECT id, business_name, contact_email, plan, status, created_at FROM ape_businesses ORDER BY id DESC LIMIT 100').all()
+      env.BUSINESS_DB.prepare('SELECT id, business_name, contact_email, plan, status, created_at FROM ape_businesses ORDER BY id DESC LIMIT 100').all()
     ]);
     return reply({
       total: Number(totals?.total || 0),
@@ -135,7 +135,7 @@ export async function onRequestGet({request, env}) {
 }
 
 export async function onRequestPost({request, env}) {
-  if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true' || !env.DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
+  if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true' || !env.BUSINESS_DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
     return reply({error:'Administrator controls are not configured.'}, 503);
   try {
     if (!await authorized(request, env)) return reply({error:'Administrator authentication required.'}, 403);
@@ -169,7 +169,7 @@ export async function onRequestPost({request, env}) {
     // statement observes changes() from the conditional UPDATE, so it writes
     // an audit event only for a successful pending-to-final transition.
     // An INSERT error rolls the entire batch back, including the UPDATE.
-    const [transition, audit] = await env.DB.batch([
+    const [transition, audit] = await env.BUSINESS_DB.batch([
       env.DB.prepare(
         "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
       ).bind(status, id),
@@ -188,7 +188,7 @@ export async function onRequestPost({request, env}) {
     const apiKey = String(env.RESEND_API_KEY || '').trim();
     if (sender && apiKey) {
       try {
-        const applicant = await env.DB.prepare(
+        const applicant = await env.BUSINESS_DB.prepare(
           'SELECT business_name, contact_email FROM ape_businesses WHERE id = ?'
         ).bind(id).first();
         if (applicant && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(applicant.contact_email || ''))) {
