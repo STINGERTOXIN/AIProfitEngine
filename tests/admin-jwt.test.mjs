@@ -453,6 +453,9 @@ test('JWKS response with stalled body fails closed at the read deadline', async 
   const previousFetch = globalThis.fetch;
   const previousTimeout = AbortSignal.timeout;
   let cancelCalled = false;
+  // AbortSignal.timeout uses an unref'ed timer in Node; keep the event loop
+  // alive until the stalled-stream assertion completes.
+  const keepAlive = setInterval(() => {}, 20);
   // Shorten the test deadline without changing the production 5-second limit.
   AbortSignal.timeout = () => previousTimeout(35);
   globalThis.fetch = async () => new Response(new ReadableStream({
@@ -472,6 +475,7 @@ test('JWKS response with stalled body fails closed at the read deadline', async 
   } finally {
     globalThis.fetch = previousFetch;
     AbortSignal.timeout = previousTimeout;
+    clearInterval(keepAlive);
   }
 });
 
