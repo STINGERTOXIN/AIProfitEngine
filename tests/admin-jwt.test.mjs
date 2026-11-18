@@ -373,3 +373,13 @@ test('isolated authorized POST rejects invalid status and application ID without
     assert.equal(emailCalls, 0);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+
+test('malformed or nonfinite JWT timestamps fail closed before key lookup', async () => {
+  for (const exp of ['9999999999', null, 0, -1, 1e999]) {
+    assert.equal(await check(jwt({ ...validClaims(), exp })), 0);
+  }
+  for (const nbf of ['not-a-date', null, true, {}, 1e999]) {
+    assert.equal(await check(jwt({ ...validClaims(), nbf })), 0);
+  }
+});
