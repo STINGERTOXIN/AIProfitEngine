@@ -1,0 +1,34 @@
+name: APE admin JWT security tests
+on:
+  pull_request:
+    paths:
+      - 'functions/api/admin/subscribers.js'
+      - 'tests/admin-jwt.test.mjs'
+      - 'tests/workerd-timeout.test.mjs'
+      - '.github/workflows/admin-jwt-security-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  jwt-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run offline admin JWT rejection tests
+        run: node --test tests/admin-jwt.test.mjs
+  workerd-timeout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated Cloudflare workerd test runtime
+        run: npm install --no-save --no-package-lock --ignore-scripts miniflare@3
+      - name: Verify timeout API in workerd (no network or secrets)
+        run: node --test tests/workerd-timeout.test.mjs

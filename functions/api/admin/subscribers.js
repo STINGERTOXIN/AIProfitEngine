@@ -12,38 +12,98 @@ function decode64url(value) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
   return Uint8Array.from(atob(padded), c => c.charCodeAt(0));
 }
+// Read at most maxBytes, including streams with absent or incorrect Content-Length.
+// A deadline applies to every read, not only to response headers.
+async function readBounded(stream, maxBytes, signal) {
+  if (!stream) throw Error('Missing stream');
+  const reader = stream.getReader();
+  const chunks = [];
+  let size = 0;
+  let completed = false;
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(Error('Stream deadline exceeded'));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, {once: true});
+  });
+  try {
+    while (true) {
+      const {done, value} = await (signal ? Promise.race([reader.read(), aborted]) : reader.read());
+      if (done) { completed = true; break; }
+      size += value.byteLength;
+      if (size > maxBytes) throw Error('Stream size exceeded');
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    if (!completed) {
+      // Do not await cancellation: a stalled upstream must not hold this request.
+      void reader.cancel().catch(() => {});
+    }
+    reader.releaseLock();
+  }
+}
 async function authorized(request, env) {
   const domain = String(env.ACCESS_TEAM_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
   const aud = String(env.ACCESS_AUD || '');
   const email = String(env.ADMIN_EMAIL || '').trim().toLowerCase();
   if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(domain) || !aud || !email) return false;
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
-  if (!token) return false;
+  // Reject oversized or malformed assertions before parsing or fetching signing keys.
+  if (!token || token.length > 8192 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return false;
   const parts = token.split('.');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3 || parts[0].length > 2048 || parts[1].length > 4096) return false;
   let header, claims;
   try {
     header = JSON.parse(new TextDecoder().decode(decode64url(parts[0])));
     claims = JSON.parse(new TextDecoder().decode(decode64url(parts[1])));
   } catch { return false; }
+  if (!header || typeof header !== 'object' || Array.isArray(header) ||
+      !claims || typeof claims !== 'object' || Array.isArray(claims)) return false;
   const now = Math.floor(Date.now() / 1000);
-  if (header.alg !== 'RS256' || typeof header.kid !== 'string' ||
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string' || !header.kid || header.kid.length > 256 ||
       claims.iss !== 'https://' + domain ||
       !((Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(aud)) ||
-      typeof claims.exp !== 'number' || claims.exp <= now ||
-      (typeof claims.nbf === 'number' && claims.nbf > now) ||
-      String(claims.email || '').toLowerCase() !== email) return false;
-  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {redirect: 'manual'});
+      typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now ||
+      (claims.nbf !== undefined && (typeof claims.nbf !== 'number' || !Number.isFinite(claims.nbf) || claims.nbf > now)) ||
+      typeof claims.email !== 'string' || claims.email.toLowerCase() !== email) return false;
+  // Bound the external signing-key lookup so unavailable Access infrastructure
+  // fails closed instead of tying up a worker request indefinitely.
+  let certResponse;
+  const deadline = AbortSignal.timeout(5000);
+  try {
+    certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {
+      redirect: 'manual', signal: deadline
+    });
+  } catch {
+    return false;
+  }
   // Never follow redirects when fetching Cloudflare Access signing keys.
   if (certResponse.status >= 300 && certResponse.status < 400) return false;
   if (!certResponse.ok) return false;
-  const keys = await certResponse.json();
-  const jwk = (keys.keys || []).find(key => key.kid === header.kid && key.kty === 'RSA');
-  if (!jwk) return false;
-  const key = await crypto.subtle.importKey('jwk', jwk,
-    {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
-  return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key,
-    decode64url(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
+  // Treat malformed, oversized, or unusable JWKS as an authentication failure.
+  // No database access occurs unless a valid signing key verifies the assertion.
+  try {
+    const rawKeys = new TextDecoder('utf-8', {fatal: true}).decode(
+      await readBounded(certResponse.body, 65536, deadline)
+    );
+    const keys = JSON.parse(rawKeys);
+    if (!keys || !Array.isArray(keys.keys)) return false;
+    const jwk = keys.keys.find(key =>
+      key && key.kid === header.kid && key.kty === 'RSA' &&
+      (!key.alg || key.alg === 'RS256') && (!key.use || key.use === 'sig'));
+    if (!jwk) return false;
+    const key = await crypto.subtle.importKey('jwk', jwk,
+      {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
+    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key,
+      decode64url(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
+  } catch {
+    return false;
+  }
 }
 export async function onRequestGet({request, env}) {
   if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true')
@@ -84,9 +144,19 @@ export async function onRequestPost({request, env}) {
     const origin = request.headers.get('Origin');
     if (!origin || origin !== new URL(request.url).origin)
       return reply({error:'Request origin rejected.'}, 403);
-    const raw = await request.text();
-    if (raw.length > 2048) return reply({error:'Request too large.'}, 413);
-    const body = JSON.parse(raw);
+    const declaredLength = Number(request.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > 2048)
+      return reply({error:'Request too large.'}, 413);
+    let raw;
+    try {
+      const bytes = await readBounded(request.body, 2048, AbortSignal.timeout(5000));
+      raw = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    } catch {
+      return reply({error:'Request too large or invalid encoding.'}, 413);
+    }
+    let body;
+    try { body = JSON.parse(raw); }
+    catch { return reply({error:'Invalid JSON request.'}, 400); }
     const id = body?.id;
     const status = body?.status;
     if (!Number.isSafeInteger(id) || id <= 0 || !['approved','rejected'].includes(status))
