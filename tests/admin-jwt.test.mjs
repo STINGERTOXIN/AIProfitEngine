@@ -271,22 +271,30 @@ test('isolated approval and rejection transitions update only pending records wi
   ]);
   const updates = [];
   let emailCalls = 0;
+  const auditEvents = [];
   const fakeDB = {
     prepare(sql) {
-      assert.match(sql, /^UPDATE ape_businesses SET status = \? WHERE id = \? AND status = 'pending'$/);
-      return {
-        bind(status, id) {
-          return {
-            async run() {
-              const row = rows.get(id);
-              if (!row || row.status !== 'pending') return { meta: { changes: 0 } };
-              row.status = status;
-              updates.push({ id, status });
-              return { meta: { changes: 1 } };
-            }
-          };
-        }
-      };
+      if (sql.startsWith('UPDATE ape_businesses')) {
+        return { bind(status, id) { return { sql, status, id }; } };
+      }
+      if (sql.startsWith('INSERT INTO ape_application_review_events')) {
+        return { bind(id, actor, status) { return { sql, id, actor, status }; } };
+      }
+      throw Error('Unexpected query in isolated review test: ' + sql);
+    },
+    async batch(statements) {
+      assert.equal(statements.length, 2);
+      const [update, audit] = statements;
+      assert.equal(update.id, audit.id);
+      assert.equal(update.status, audit.status);
+      const row = rows.get(update.id);
+      if (!row || row.status !== 'pending') {
+        return [{ meta: { changes: 0 } }, { meta: { changes: 0 } }];
+      }
+      row.status = update.status;
+      updates.push({ id: update.id, status: update.status });
+      auditEvents.push({ id: audit.id, status: audit.status, actor: audit.actor });
+      return [{ meta: { changes: 1 } }, { meta: { changes: 1 } }];
     }
   };
   globalThis.fetch = async url => {
@@ -297,7 +305,7 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
     return Response.json({ keys: [jwk] });
   };
-  const isolatedEnv = { ...env, DB: fakeDB, RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
+  const isolatedEnv = { ...env, DB: fakeDB, ADMIN_REVIEW_AUDIT_ENABLED: 'true', RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
   async function submit(id, status) {
     const response = await onRequestPost({
       request: new Request('https://preview.example.invalid/api/admin/subscribers', {
@@ -332,6 +340,7 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(rows.get(101).status, 'approved');
     assert.equal(rows.get(102).status, 'rejected');
     assert.equal(emailCalls, 0);
+    assert.deepEqual(auditEvents.map(({id,status}) => ({id,status})), updates);
   } finally { globalThis.fetch = originalFetch; }
 });
 
