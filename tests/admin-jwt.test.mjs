@@ -158,3 +158,32 @@ test('valid signed token does not bypass POST origin validation or trigger email
     globalThis.fetch = originalFetch;
   }
 });
+
+test('future nbf and wrong issuer are rejected before fetching keys', async () => {
+  assert.equal(await check(jwt({ ...validClaims(), nbf: now + 600 })), 0);
+  assert.equal(await check(jwt({ ...validClaims(), iss: 'https://attacker.example.invalid' })), 0);
+});
+test('JWKS redirects, incorrect signing metadata, and oversized key responses fail closed', async () => {
+  const token = jwt();
+  const responses = [
+    () => new Response('', { status: 302, headers: { Location: 'https://attacker.example.invalid' } }),
+    () => Response.json({ keys: [{ ...jwk, alg: 'HS256' }] }),
+    () => Response.json({ keys: [{ ...jwk, use: 'enc' }] }),
+    () => Response.json({ keys: [{ ...jwk, kid: 'different-key' }] }),
+    () => new Response(' '.repeat(65537), { status: 200 })
+  ];
+  for (const respond of responses) {
+    globalThis.fetch = async () => respond();
+    try {
+      const response = await onRequestGet({
+        request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+          headers: { 'Cf-Access-Jwt-Assertion': token }
+        }),
+        env
+      });
+      assert.equal(response.status, 403);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
