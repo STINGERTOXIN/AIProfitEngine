@@ -15,6 +15,9 @@ const env = {
   ADMIN_EMAIL: 'admin@example.invalid',
   DB: {
     prepare() { throw Error('Unauthorized request reached the database'); }
+  },
+  BUSINESS_DB: {
+    prepare() { throw Error('Unauthorized request reached the business database'); }
   }
 };
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -118,7 +121,7 @@ test('valid signed Access JWT permits read-only dashboard queries', async () => 
       request: new Request('https://preview.example.invalid/api/admin/subscribers', {
         headers: { 'Cf-Access-Jwt-Assertion': jwt() }
       }),
-      env: { ...env, DB: fakeDB }
+      env: { ...env, DB: fakeDB, BUSINESS_DB: fakeDB }
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -305,7 +308,7 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
     return Response.json({ keys: [jwk] });
   };
-  const isolatedEnv = { ...env, DB: fakeDB, ADMIN_REVIEW_AUDIT_ENABLED: 'true', RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
+  const isolatedEnv = { ...env, BUSINESS_DB: fakeDB, ADMIN_REVIEW_AUDIT_ENABLED: 'true', RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
   async function submit(id, status) {
     const response = await onRequestPost({
       request: new Request('https://preview.example.invalid/api/admin/subscribers', {
