@@ -1,0 +1,33 @@
+name: APE Phase 7 Audit SQL Tests
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/phase7_review_audit_events.sql'
+      - 'tests/test_phase7_audit_sql.py'
+      - '.github/workflows/phase7-audit-sql.yml'
+  push:
+    branches:
+      - phase7-review-audit-design-20261118
+    paths:
+      - 'migrations/phase7_review_audit_events.sql'
+      - 'tests/test_phase7_audit_sql.py'
+      - '.github/workflows/phase7-audit-sql.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run isolated migration and rollback contract tests
+        run: python -m unittest discover -s tests -p 'test_phase7_audit_sql.py' -v
