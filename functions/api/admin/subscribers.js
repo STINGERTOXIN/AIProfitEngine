@@ -18,27 +18,34 @@ async function authorized(request, env) {
   const email = String(env.ADMIN_EMAIL || '').trim().toLowerCase();
   if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(domain) || !aud || !email) return false;
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
-  if (!token) return false;
+  // Reject oversized or malformed assertions before parsing or fetching signing keys.
+  if (!token || token.length > 8192 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return false;
   const parts = token.split('.');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3 || parts[0].length > 2048 || parts[1].length > 4096) return false;
   let header, claims;
   try {
     header = JSON.parse(new TextDecoder().decode(decode64url(parts[0])));
     claims = JSON.parse(new TextDecoder().decode(decode64url(parts[1])));
   } catch { return false; }
   const now = Math.floor(Date.now() / 1000);
-  if (header.alg !== 'RS256' || typeof header.kid !== 'string' ||
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string' || !header.kid || header.kid.length > 256 ||
       claims.iss !== 'https://' + domain ||
       !((Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(aud)) ||
       typeof claims.exp !== 'number' || claims.exp <= now ||
       (typeof claims.nbf === 'number' && claims.nbf > now) ||
       String(claims.email || '').toLowerCase() !== email) return false;
-  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {redirect: 'manual'});
+  // Bound the external signing-key lookup so unavailable Access infrastructure
+  // fails closed instead of tying up a worker request indefinitely.
+  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {
+    redirect: 'manual', signal: AbortSignal.timeout(5000)
+  });
   // Never follow redirects when fetching Cloudflare Access signing keys.
   if (certResponse.status >= 300 && certResponse.status < 400) return false;
   if (!certResponse.ok) return false;
   const keys = await certResponse.json();
-  const jwk = (keys.keys || []).find(key => key.kid === header.kid && key.kty === 'RSA');
+  const jwk = (Array.isArray(keys.keys) ? keys.keys : []).find(key =>
+    key.kid === header.kid && key.kty === 'RSA' &&
+    (!key.alg || key.alg === 'RS256') && (!key.use || key.use === 'sig'));
   if (!jwk) return false;
   const key = await crypto.subtle.importKey('jwk', jwk,
     {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, ['verify']);
@@ -84,6 +91,9 @@ export async function onRequestPost({request, env}) {
     const origin = request.headers.get('Origin');
     if (!origin || origin !== new URL(request.url).origin)
       return reply({error:'Request origin rejected.'}, 403);
+    const declaredLength = Number(request.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > 2048)
+      return reply({error:'Request too large.'}, 413);
     const raw = await request.text();
     if (raw.length > 2048) return reply({error:'Request too large.'}, 413);
     const body = JSON.parse(raw);
