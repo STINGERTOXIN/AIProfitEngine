@@ -56,6 +56,12 @@ async function load(){
  }catch(err){$('status').classList.add('error');$('status').textContent='Dashboard not ready: '+(err.message||'Unknown error')+' Your subscriber information remains protected.'}
  finally{$('refresh').disabled=false}
 }
-$('application-filter').addEventListener('change',renderApplications);
+const filterStorageKey='ape-admin-application-filter';
+const validFilters=new Set(['all','pending','approved','rejected']);
+try{const saved=sessionStorage.getItem(filterStorageKey);if(validFilters.has(saved))$('application-filter').value=saved}catch{}
+$('application-filter').addEventListener('change',()=>{
+ try{sessionStorage.setItem(filterStorageKey,$('application-filter').value)}catch{}
+ renderApplications();
+});
 $('refresh').addEventListener('click',load);load();
 </script></body></html>
