@@ -52,8 +52,25 @@ async function authorized(request, env) {
   // Treat malformed, oversized, or unusable JWKS as an authentication failure.
   // No database access occurs unless a valid signing key verifies the assertion.
   try {
-    const rawKeys = await certResponse.text();
-    if (rawKeys.length > 65536) return false;
+    // Bound bytes while reading, rather than buffering an untrusted response first.
+    const reader = certResponse.body?.getReader();
+    if (!reader) return false;
+    const decoder = new TextDecoder('utf-8', {fatal: true});
+    let rawKeys = '';
+    let receivedBytes = 0;
+    try {
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        receivedBytes += value.byteLength;
+        if (receivedBytes > 65536) return false;
+        rawKeys += decoder.decode(value, {stream: true});
+      }
+      rawKeys += decoder.decode();
+    } finally {
+      // Also stop upstream delivery when the byte limit is exceeded.
+      await reader.cancel().catch(() => {});
+    }
     const keys = JSON.parse(rawKeys);
     if (!keys || !Array.isArray(keys.keys)) return false;
     const jwk = keys.keys.find(key =>
