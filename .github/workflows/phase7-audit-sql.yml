@@ -5,6 +5,8 @@ on:
     paths:
       - 'migrations/phase7_review_audit_events.sql'
       - 'tests/test_phase7_audit_sql.py'
+      - 'tests/test_phase7_api_contract.py'
+      - 'functions/api/admin/subscribers.js'
       - '.github/workflows/phase7-audit-sql.yml'
   push:
     branches:
@@ -12,6 +14,8 @@ on:
     paths:
       - 'migrations/phase7_review_audit_events.sql'
       - 'tests/test_phase7_audit_sql.py'
+      - 'tests/test_phase7_api_contract.py'
+      - 'functions/api/admin/subscribers.js'
       - '.github/workflows/phase7-audit-sql.yml'
   workflow_dispatch:
 
@@ -30,4 +34,4 @@ jobs:
         with:
           python-version: '3.12'
       - name: Run isolated migration and rollback contract tests
-        run: python -m unittest discover -s tests -p 'test_phase7_audit_sql.py' -v
+        run: python -m unittest discover -s tests -p 'test_phase7_*.py' -v
