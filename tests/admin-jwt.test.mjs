@@ -421,3 +421,30 @@ test('authorized malformed JSON review request returns 400 without DB writes or 
     assert.equal(emailCalls, 0);
   } finally { globalThis.fetch = previousFetch; }
 });
+
+test('oversized streamed signing-key response is rejected before reading the full body', async () => {
+  let pulls = 0;
+  let cancelled = false;
+  const token = jwt();
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    pull(controller) {
+      pulls++;
+      controller.enqueue(new Uint8Array(32768).fill(32));
+    },
+    cancel() { cancelled = true; }
+  }));
+  try {
+    const response = await onRequestGet({
+      request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+        headers: { 'Cf-Access-Jwt-Assertion': token }
+      }),
+      env
+    });
+    assert.equal(response.status, 403);
+    assert.ok(pulls <= 4, 'must stop streaming promptly after 64 KiB');
+    assert.equal(cancelled, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
