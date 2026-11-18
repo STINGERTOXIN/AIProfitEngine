@@ -262,3 +262,114 @@ test('authorized POST rejects oversized JSON without database writes or emails',
     assert.equal(emailCalls, 0);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+
+test('isolated approval and rejection transitions update only pending records without email', async () => {
+  const rows = new Map([
+    [101, { status: 'pending', business_name: 'Synthetic One', contact_email: 'one@example.invalid' }],
+    [102, { status: 'pending', business_name: 'Synthetic Two', contact_email: 'two@example.invalid' }]
+  ]);
+  const updates = [];
+  let emailCalls = 0;
+  const fakeDB = {
+    prepare(sql) {
+      assert.match(sql, /^UPDATE ape_businesses SET status = \? WHERE id = \? AND status = 'pending'$/);
+      return {
+        bind(status, id) {
+          return {
+            async run() {
+              const row = rows.get(id);
+              if (!row || row.status !== 'pending') return { meta: { changes: 0 } };
+              row.status = status;
+              updates.push({ id, status });
+              return { meta: { changes: 1 } };
+            }
+          };
+        }
+      };
+    }
+  };
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) {
+      emailCalls++;
+      throw Error('Email must never be sent in isolated tests');
+    }
+    assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
+    return Response.json({ keys: [jwk] });
+  };
+  const isolatedEnv = { ...env, DB: fakeDB, RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
+  async function submit(id, status) {
+    const response = await onRequestPost({
+      request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+        method: 'POST',
+        headers: {
+          'Cf-Access-Jwt-Assertion': jwt(),
+          'Content-Type': 'application/json',
+          Origin: 'https://preview.example.invalid'
+        },
+        body: JSON.stringify({ id, status })
+      }),
+      env: isolatedEnv
+    });
+    return { status: response.status, body: await response.json() };
+  }
+  try {
+    const approved = await submit(101, 'approved');
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.ok, true);
+    assert.equal(approved.body.status, 'approved');
+    assert.equal(approved.body.email.sent, false);
+    const rejected = await submit(102, 'rejected');
+    assert.equal(rejected.status, 200);
+    assert.equal(rejected.body.ok, true);
+    assert.equal(rejected.body.status, 'rejected');
+    assert.equal(rejected.body.email.sent, false);
+    for (const [id, status] of [[101, 'rejected'], [102, 'approved'], [999, 'approved']]) {
+      const result = await submit(id, status);
+      assert.equal(result.status, 409);
+    }
+    assert.deepEqual(updates, [{ id: 101, status: 'approved' }, { id: 102, status: 'rejected' }]);
+    assert.equal(rows.get(101).status, 'approved');
+    assert.equal(rows.get(102).status, 'rejected');
+    assert.equal(emailCalls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('isolated authorized POST rejects invalid status and application ID without writes or emails', async () => {
+  let dbCalls = 0;
+  let emailCalls = 0;
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) {
+      emailCalls++;
+      throw Error('Email must never be sent');
+    }
+    assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
+    return Response.json({ keys: [jwk] });
+  };
+  try {
+    for (const body of [
+      { id: 1, status: 'pending' },
+      { id: 1, status: 'deleted' },
+      { id: -1, status: 'approved' },
+      { id: '1', status: 'approved' },
+      { id: 1.5, status: 'rejected' },
+      { id: Number.MAX_SAFE_INTEGER + 1, status: 'approved' }
+    ]) {
+      const response = await onRequestPost({
+        request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+          method: 'POST',
+          headers: {
+            'Cf-Access-Jwt-Assertion': jwt(),
+            'Content-Type': 'application/json',
+            Origin: 'https://preview.example.invalid'
+          },
+          body: JSON.stringify(body)
+        }),
+        env: { ...env, DB: { prepare() { dbCalls++; throw Error('Invalid request reached DB'); } }, RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' }
+      });
+      assert.equal(response.status, 400);
+    }
+    assert.equal(dbCalls, 0);
+    assert.equal(emailCalls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
