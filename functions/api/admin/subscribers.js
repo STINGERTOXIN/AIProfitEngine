@@ -27,6 +27,8 @@ async function authorized(request, env) {
     header = JSON.parse(new TextDecoder().decode(decode64url(parts[0])));
     claims = JSON.parse(new TextDecoder().decode(decode64url(parts[1])));
   } catch { return false; }
+  if (!header || typeof header !== 'object' || Array.isArray(header) ||
+      !claims || typeof claims !== 'object' || Array.isArray(claims)) return false;
   const now = Math.floor(Date.now() / 1000);
   if (header.alg !== 'RS256' || typeof header.kid !== 'string' || !header.kid || header.kid.length > 256 ||
       claims.iss !== 'https://' + domain ||
@@ -36,9 +38,14 @@ async function authorized(request, env) {
       String(claims.email || '').toLowerCase() !== email) return false;
   // Bound the external signing-key lookup so unavailable Access infrastructure
   // fails closed instead of tying up a worker request indefinitely.
-  const certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {
-    redirect: 'manual', signal: AbortSignal.timeout(5000)
-  });
+  let certResponse;
+  try {
+    certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {
+      redirect: 'manual', signal: AbortSignal.timeout(5000)
+    });
+  } catch {
+    return false;
+  }
   // Never follow redirects when fetching Cloudflare Access signing keys.
   if (certResponse.status >= 300 && certResponse.status < 400) return false;
   if (!certResponse.ok) return false;
