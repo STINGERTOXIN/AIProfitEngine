@@ -108,7 +108,7 @@ async function authorized(request, env) {
 export async function onRequestGet({request, env}) {
   if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true')
     return reply({error:'Subscriber administration temporarily unavailable pending security verification.'}, 503);
-  if (!env.DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
+  if (!env.DB || !env.BUSINESS_DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
     return reply({error:'Subscriber administration is not fully configured.'}, 503);
   try {
     if (!await authorized(request, env))
@@ -119,7 +119,7 @@ export async function onRequestGet({request, env}) {
         SUM(CASE WHEN created_at >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS last30
         FROM subscribers`).first(),
       env.DB.prepare('SELECT email, status, created_at FROM subscribers ORDER BY created_at DESC, id DESC LIMIT 100').all(),
-      env.DB.prepare('SELECT id, business_name, contact_email, plan, status, created_at FROM ape_businesses ORDER BY id DESC LIMIT 100').all()
+      env.BUSINESS_DB.prepare('SELECT id, business_name, contact_email, plan, status, created_at FROM ape_businesses ORDER BY id DESC LIMIT 100').all()
     ]);
     return reply({
       total: Number(totals?.total || 0),
@@ -135,7 +135,7 @@ export async function onRequestGet({request, env}) {
 }
 
 export async function onRequestPost({request, env}) {
-  if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true' || !env.DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
+  if (env.ADMIN_SUBSCRIBERS_ENABLED !== 'true' || !env.BUSINESS_DB || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.ADMIN_EMAIL)
     return reply({error:'Administrator controls are not configured.'}, 503);
   try {
     if (!await authorized(request, env)) return reply({error:'Administrator authentication required.'}, 403);
@@ -161,10 +161,26 @@ export async function onRequestPost({request, env}) {
     const status = body?.status;
     if (!Number.isSafeInteger(id) || id <= 0 || !['approved','rejected'].includes(status))
       return reply({error:'Invalid application or status.'}, 400);
-    const result = await env.DB.prepare(
-      "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
-    ).bind(status, id).run();
-    if (result.meta?.changes !== 1) return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
+    // Fail closed until the audit migration is applied and explicitly enabled.
+    // Do not permit unaudited application decisions during rollout.
+    if (env.ADMIN_REVIEW_AUDIT_ENABLED !== 'true')
+      return reply({error:'Application review temporarily unavailable pending audit verification.'}, 503);
+    // D1 batch executes on one SQLite connection in a transaction. The second
+    // statement observes changes() from the conditional UPDATE, so it writes
+    // an audit event only for a successful pending-to-final transition.
+    // An INSERT error rolls the entire batch back, including the UPDATE.
+    const [transition, audit] = await env.BUSINESS_DB.batch([
+      env.BUSINESS_DB.prepare(
+        "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
+      ).bind(status, id),
+      env.BUSINESS_DB.prepare(
+        "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status) SELECT ?, ?, 'pending', ? WHERE changes() = 1"
+      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status)
+    ]);
+    if (transition.meta?.changes !== 1)
+      return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
+    if (audit.meta?.changes !== 1)
+      throw Error('Audit event was not recorded; review transaction cannot be confirmed.');
     // Send a transactional decision notice only after the database update succeeds.
     // Email delivery requires a verified Resend sender configured as RESEND_FROM_EMAIL.
     let email = {sent:false, reason:'Email notification is not configured.'};
@@ -172,7 +188,7 @@ export async function onRequestPost({request, env}) {
     const apiKey = String(env.RESEND_API_KEY || '').trim();
     if (sender && apiKey) {
       try {
-        const applicant = await env.DB.prepare(
+        const applicant = await env.BUSINESS_DB.prepare(
           'SELECT business_name, contact_email FROM ape_businesses WHERE id = ?'
         ).bind(id).first();
         if (applicant && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(applicant.contact_email || ''))) {
