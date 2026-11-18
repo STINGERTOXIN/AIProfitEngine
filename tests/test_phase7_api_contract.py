@@ -19,7 +19,7 @@ class Phase7ApiContract(unittest.TestCase):
         self.assertIn("if (audit.meta?.changes !== 1)", API)
 
     def test_email_only_after_batch(self):
-        self.assertLess(API.index("await env.DB.batch(["), API.index("const sender = String(env.RESEND_FROM_EMAIL"))
+        self.assertLess(API.index("await env.BUSINESS_DB.batch(["), API.index("const sender = String(env.RESEND_FROM_EMAIL"))
 
 if __name__ == "__main__":
     unittest.main()
