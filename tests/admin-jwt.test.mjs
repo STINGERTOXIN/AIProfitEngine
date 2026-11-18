@@ -187,3 +187,31 @@ test('JWKS redirects, incorrect signing metadata, and oversized key responses fa
     }
   }
 });
+
+test('Access signing-key timeout or network rejection fails closed', async () => {
+  const token = jwt();
+  for (const error of [
+    new DOMException('The operation was aborted', 'AbortError'),
+    new TypeError('Network connection failed')
+  ]) {
+    let calls = 0;
+    globalThis.fetch = async (_url, options) => {
+      calls++;
+      assert.equal(options.redirect, 'manual');
+      assert.ok(options.signal, 'JWKS request must have an abort signal');
+      throw error;
+    };
+    try {
+      const response = await onRequestGet({
+        request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+          headers: { 'Cf-Access-Jwt-Assertion': token }
+        }),
+        env
+      });
+      assert.equal(response.status, 403);
+      assert.equal(calls, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
