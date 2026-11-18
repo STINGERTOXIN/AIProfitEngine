@@ -33,8 +33,8 @@ async function authorized(request, env) {
   if (header.alg !== 'RS256' || typeof header.kid !== 'string' || !header.kid || header.kid.length > 256 ||
       claims.iss !== 'https://' + domain ||
       !((Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(aud)) ||
-      typeof claims.exp !== 'number' || claims.exp <= now ||
-      (typeof claims.nbf === 'number' && claims.nbf > now) ||
+      typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now ||
+      (claims.nbf !== undefined && (typeof claims.nbf !== 'number' || !Number.isFinite(claims.nbf) || claims.nbf > now)) ||
       String(claims.email || '').toLowerCase() !== email) return false;
   // Bound the external signing-key lookup so unavailable Access infrastructure
   // fails closed instead of tying up a worker request indefinitely.
