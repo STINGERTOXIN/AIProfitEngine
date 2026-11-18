@@ -170,10 +170,10 @@ export async function onRequestPost({request, env}) {
     // an audit event only for a successful pending-to-final transition.
     // An INSERT error rolls the entire batch back, including the UPDATE.
     const [transition, audit] = await env.BUSINESS_DB.batch([
-      env.DB.prepare(
+      env.BUSINESS_DB.prepare(
         "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
       ).bind(status, id),
-      env.DB.prepare(
+      env.BUSINESS_DB.prepare(
         "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status) SELECT ?, ?, 'pending', ? WHERE changes() = 1"
       ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status)
     ]);
