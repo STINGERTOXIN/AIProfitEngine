@@ -12,6 +12,41 @@ function decode64url(value) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
   return Uint8Array.from(atob(padded), c => c.charCodeAt(0));
 }
+// Read at most maxBytes, including streams with absent or incorrect Content-Length.
+// A deadline applies to every read, not only to response headers.
+async function readBounded(stream, maxBytes, signal) {
+  if (!stream) throw Error('Missing stream');
+  const reader = stream.getReader();
+  const chunks = [];
+  let size = 0;
+  let completed = false;
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(Error('Stream deadline exceeded'));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, {once: true});
+  });
+  try {
+    while (true) {
+      const {done, value} = await (signal ? Promise.race([reader.read(), aborted]) : reader.read());
+      if (done) { completed = true; break; }
+      size += value.byteLength;
+      if (size > maxBytes) throw Error('Stream size exceeded');
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    if (!completed) {
+      // Do not await cancellation: a stalled upstream must not hold this request.
+      void reader.cancel().catch(() => {});
+    }
+    reader.releaseLock();
+  }
+}
 async function authorized(request, env) {
   const domain = String(env.ACCESS_TEAM_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
   const aud = String(env.ACCESS_AUD || '');
@@ -39,9 +74,10 @@ async function authorized(request, env) {
   // Bound the external signing-key lookup so unavailable Access infrastructure
   // fails closed instead of tying up a worker request indefinitely.
   let certResponse;
+  const deadline = AbortSignal.timeout(5000);
   try {
     certResponse = await fetch('https://' + domain + '/cdn-cgi/access/certs', {
-      redirect: 'manual', signal: AbortSignal.timeout(5000)
+      redirect: 'manual', signal: deadline
     });
   } catch {
     return false;
@@ -52,25 +88,9 @@ async function authorized(request, env) {
   // Treat malformed, oversized, or unusable JWKS as an authentication failure.
   // No database access occurs unless a valid signing key verifies the assertion.
   try {
-    // Bound bytes while reading, rather than buffering an untrusted response first.
-    const reader = certResponse.body?.getReader();
-    if (!reader) return false;
-    const decoder = new TextDecoder('utf-8', {fatal: true});
-    let rawKeys = '';
-    let receivedBytes = 0;
-    try {
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        receivedBytes += value.byteLength;
-        if (receivedBytes > 65536) return false;
-        rawKeys += decoder.decode(value, {stream: true});
-      }
-      rawKeys += decoder.decode();
-    } finally {
-      // Also stop upstream delivery when the byte limit is exceeded.
-      await reader.cancel().catch(() => {});
-    }
+    const rawKeys = new TextDecoder('utf-8', {fatal: true}).decode(
+      await readBounded(certResponse.body, 65536, deadline)
+    );
     const keys = JSON.parse(rawKeys);
     if (!keys || !Array.isArray(keys.keys)) return false;
     const jwk = keys.keys.find(key =>
@@ -127,8 +147,13 @@ export async function onRequestPost({request, env}) {
     const declaredLength = Number(request.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > 2048)
       return reply({error:'Request too large.'}, 413);
-    const raw = await request.text();
-    if (raw.length > 2048) return reply({error:'Request too large.'}, 413);
+    let raw;
+    try {
+      const bytes = await readBounded(request.body, 2048);
+      raw = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    } catch {
+      return reply({error:'Request too large or invalid encoding.'}, 413);
+    }
     let body;
     try { body = JSON.parse(raw); }
     catch { return reply({error:'Invalid JSON request.'}, 400); }
