@@ -389,3 +389,35 @@ test('administrator email must be a string claim, not a coerced array or object'
     assert.equal(await check(jwt({ ...validClaims(), email })), 0);
   }
 });
+
+test('authorized malformed JSON review request returns 400 without DB writes or emails', async () => {
+  let dbCalls = 0;
+  let emailCalls = 0;
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) {
+      emailCalls++;
+      throw Error('No emails permitted');
+    }
+    assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
+    return Response.json({ keys: [jwk] });
+  };
+  try {
+    const response = await onRequestPost({
+      request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+        method: 'POST',
+        headers: {
+          'Cf-Access-Jwt-Assertion': jwt(),
+          'Content-Type': 'application/json',
+          Origin: 'https://preview.example.invalid'
+        },
+        body: '{"id":'
+      }),
+      env: { ...env, DB: { prepare() { dbCalls++; throw Error('Malformed JSON reached database'); } } }
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'Invalid JSON request.' });
+    assert.equal(dbCalls, 0);
+    assert.equal(emailCalls, 0);
+  } finally { globalThis.fetch = previousFetch; }
+});
