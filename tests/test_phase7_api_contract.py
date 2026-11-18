@@ -12,7 +12,7 @@ class Phase7ApiContract(unittest.TestCase):
         self.assertIn("pending audit verification", API)
 
     def test_batch_contains_transition_and_audit(self):
-        self.assertIn("await env.DB.batch([", API)
+        self.assertIn("await env.BUSINESS_DB.batch([", API)
         self.assertIn("UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'", API)
         self.assertIn("INSERT INTO ape_application_review_events", API)
         self.assertIn("WHERE changes() = 1", API)
