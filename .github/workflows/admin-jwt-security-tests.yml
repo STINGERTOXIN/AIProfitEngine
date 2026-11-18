@@ -1,0 +1,21 @@
+name: APE admin JWT security tests
+on:
+  pull_request:
+    paths:
+      - 'functions/api/admin/subscribers.js'
+      - 'tests/admin-jwt.test.mjs'
+      - '.github/workflows/admin-jwt-security-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  jwt-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run offline admin JWT rejection tests
+        run: node --test tests/admin-jwt.test.mjs
