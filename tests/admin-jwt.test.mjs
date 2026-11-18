@@ -215,3 +215,50 @@ test('Access signing-key timeout or network rejection fails closed', async () =>
     }
   }
 });
+
+test('unauthenticated POST cannot mutate applications or send decision emails', async () => {
+  let dbCalls = 0;
+  let networkCalls = 0;
+  globalThis.fetch = async () => { networkCalls++; throw Error('Unexpected external request'); };
+  try {
+    for (const token of [null, 'invalid.jwt.token']) {
+      const headers = { 'Content-Type': 'application/json', Origin: 'https://preview.example.invalid' };
+      if (token) headers['Cf-Access-Jwt-Assertion'] = token;
+      const response = await onRequestPost({
+        request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+          method: 'POST', headers, body: JSON.stringify({ id: 1, status: 'approved' })
+        }),
+        env: { ...env, DB: { prepare() { dbCalls++; throw Error('Unauthorized DB write'); } } }
+      });
+      assert.equal(response.status, 403);
+    }
+    assert.equal(dbCalls, 0);
+    assert.equal(networkCalls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+test('authorized POST rejects oversized JSON without database writes or emails', async () => {
+  let dbCalls = 0;
+  let emailCalls = 0;
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) { emailCalls++; throw Error('Email prohibited'); }
+    assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
+    return Response.json({ keys: [jwk] });
+  };
+  try {
+    const response = await onRequestPost({
+      request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+        method: 'POST',
+        headers: {
+          'Cf-Access-Jwt-Assertion': jwt(),
+          'Content-Type': 'application/json',
+          Origin: 'https://preview.example.invalid'
+        },
+        body: JSON.stringify({ id: 1, status: 'approved', padding: 'x'.repeat(2200) })
+      }),
+      env: { ...env, DB: { prepare() { dbCalls++; throw Error('Oversized request reached DB'); } } }
+    });
+    assert.equal(response.status, 413);
+    assert.equal(dbCalls, 0);
+    assert.equal(emailCalls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
