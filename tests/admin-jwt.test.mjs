@@ -383,3 +383,9 @@ test('malformed or nonfinite JWT timestamps fail closed before key lookup', asyn
     assert.equal(await check(jwt({ ...validClaims(), nbf })), 0);
   }
 });
+
+test('administrator email must be a string claim, not a coerced array or object', async () => {
+  for (const email of [[env.ADMIN_EMAIL], { value: env.ADMIN_EMAIL }, null, 123]) {
+    assert.equal(await check(jwt({ ...validClaims(), email })), 0);
+  }
+});
