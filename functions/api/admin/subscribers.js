@@ -149,7 +149,7 @@ export async function onRequestPost({request, env}) {
       return reply({error:'Request too large.'}, 413);
     let raw;
     try {
-      const bytes = await readBounded(request.body, 2048);
+      const bytes = await readBounded(request.body, 2048, AbortSignal.timeout(5000));
       raw = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
     } catch {
       return reply({error:'Request too large or invalid encoding.'}, 413);
