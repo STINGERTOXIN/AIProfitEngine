@@ -448,3 +448,67 @@ test('oversized streamed signing-key response is rejected before reading the ful
     globalThis.fetch = previousFetch;
   }
 });
+
+test('JWKS response with stalled body fails closed at the read deadline', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousTimeout = AbortSignal.timeout;
+  let cancelCalled = false;
+  // Shorten the test deadline without changing the production 5-second limit.
+  AbortSignal.timeout = () => previousTimeout(35);
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"keys":[')); },
+    cancel() { cancelCalled = true; }
+  }));
+  try {
+    const start = Date.now();
+    const response = await onRequestGet({
+      request: new Request('https://preview.example.invalid/api/admin/subscribers', {
+        headers: { 'Cf-Access-Jwt-Assertion': jwt() }
+      }), env
+    });
+    assert.equal(response.status, 403);
+    assert.ok(Date.now() - start < 1000, 'stalled body must not hang');
+    assert.equal(cancelCalled, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    AbortSignal.timeout = previousTimeout;
+  }
+});
+
+test('streamed oversized POST without Content-Length rejects before D1 or email', async () => {
+  const previousFetch = globalThis.fetch;
+  let dbCalls = 0;
+  let emailCalls = 0;
+  let pulls = 0;
+  globalThis.fetch = async url => {
+    if (String(url).includes('resend.com')) { emailCalls++; throw Error('No email'); }
+    return Response.json({keys: [jwk]});
+  };
+  try {
+    const body = new ReadableStream({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(new Uint8Array(1024).fill(32));
+      }
+    });
+    const request = new Request('https://preview.example.invalid/api/admin/subscribers', {
+      method: 'POST',
+      duplex: 'half',
+      headers: {
+        'Cf-Access-Jwt-Assertion': jwt(),
+        'Content-Type': 'application/json',
+        Origin: 'https://preview.example.invalid'
+      },
+      body
+    });
+    assert.equal(request.headers.has('content-length'), false);
+    const response = await onRequestPost({
+      request,
+      env: { ...env, DB: { prepare() { dbCalls++; throw Error('No DB writes'); } } }
+    });
+    assert.equal(response.status, 413);
+    assert.ok(pulls <= 5, 'must stop reading promptly');
+    assert.equal(dbCalls, 0);
+    assert.equal(emailCalls, 0);
+  } finally { globalThis.fetch = previousFetch; }
+});
