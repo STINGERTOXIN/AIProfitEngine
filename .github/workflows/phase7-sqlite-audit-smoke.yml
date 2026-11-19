@@ -1,0 +1,20 @@
+name: Phase 7 SQLite audit smoke tests
+
+on:
+  pull_request:
+    paths:
+      - 'tests/phase7-sqlite-audit-atomicity.py'
+      - '.github/workflows/phase7-sqlite-audit-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-audit-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated SQLite transaction smoke tests
+        run: python3 -m unittest discover -s tests -p 'phase7-sqlite-audit-atomicity.py' -v
