@@ -10,20 +10,9 @@ import threading
 import unittest
 from pathlib import Path
 
-SCHEMA = """
-CREATE TABLE ape_businesses (id INTEGER PRIMARY KEY, status TEXT NOT NULL);
-CREATE TABLE ape_application_review_events (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- application_id INTEGER NOT NULL,
- actor_email TEXT NOT NULL,
- old_status TEXT NOT NULL CHECK(old_status = 'pending'),
- new_status TEXT NOT NULL CHECK(new_status IN ('approved','rejected')),
- created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
- request_id TEXT
-);
-CREATE INDEX ape_review_events_application_time_idx
- ON ape_application_review_events(application_id, created_at);
-"""
+# Test the checked-in migration instead of a divergent hand-copied schema.
+MIGRATION = (Path(__file__).resolve().parents[1] / "migrations" / "phase7_review_audit_events.sql").read_text(encoding="utf-8")
+SCHEMA = "CREATE TABLE ape_businesses (id INTEGER PRIMARY KEY, status TEXT NOT NULL);\n" + MIGRATION
 UPDATE = "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
 INSERT = """INSERT INTO ape_application_review_events
  (application_id, actor_email, old_status, new_status)
