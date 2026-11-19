@@ -17,4 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run isolated SQLite transaction smoke tests
-        run: python3 -m unittest discover -s tests -p 'phase7-sqlite-audit-atomicity.py' -v
+        run: python3 tests/phase7-sqlite-audit-atomicity.py
