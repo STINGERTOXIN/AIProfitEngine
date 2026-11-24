@@ -11,8 +11,8 @@ async function limit(db,secret,key,max){
  const row=await db.prepare("INSERT INTO ape_login_rate_limits(bucket,window_start,attempts) VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN window_start=excluded.window_start THEN MIN(attempts+1,1000000) ELSE 1 END,window_start=excluded.window_start RETURNING attempts").bind(bucket,window).first();
  return !!row&&row.attempts<=max;
 }
-export async function onRequestPost({request,env}){
- if(env.CUSTOMER_LOGIN_ENABLED!=='true'||!env.DB||env.ONBOARDING_ORIGIN!=='https://aiprofitengine.ai'||new URL(request.url).origin!==env.ONBOARDING_ORIGIN)return reply({error:'Sign-in unavailable'},503);
+export async function onRequestPost({request,env,waitUntil}){
+ if(typeof waitUntil!=='function'||env.CUSTOMER_LOGIN_ENABLED!=='true'||!env.DB||env.ONBOARDING_ORIGIN!=='https://aiprofitengine.ai'||new URL(request.url).origin!==env.ONBOARDING_ORIGIN)return reply({error:'Sign-in unavailable'},503);
  if(request.headers.get('Origin')!==env.ONBOARDING_ORIGIN)return reply({error:'Forbidden'},403);
  if(request.headers.get('Content-Type')?.split(';')[0].trim()!=='application/json')return reply({error:'JSON required'},415);
  const ip=request.headers.get('CF-Connecting-IP');
@@ -31,11 +31,16 @@ export async function onRequestPost({request,env}){
  if(!await limit(env.DB,env.LOGIN_RATE_LIMIT_SECRET,'ip:'+ip,10))return reply({error:'Try again later'},429);
  if(!await limit(env.DB,env.LOGIN_RATE_LIMIT_SECRET,'global',100))return reply({error:'Try again later'},429);
  if(!await limit(env.DB,env.LOGIN_RATE_LIMIT_SECRET,'email:'+email,3))return accepted();
+ // Keep account-dependent work outside the public response path.
+ waitUntil((async()=>{
+ try{
  const rows=await env.DB.prepare("SELECT a.id,a.email FROM ape_customer_accounts a JOIN ape_businesses b ON b.id=a.application_id WHERE a.email=? COLLATE NOCASE AND a.status='active' AND b.status='approved' LIMIT 2").bind(email).all();
  // Ambiguous email ownership fails closed until account selection is designed.
- if(rows.results?.length!==1)return accepted();
+ if(rows.results?.length!==1)return;
  const account=rows.results[0],challenge=await issueLoginChallenge(env.DB,account.id);
  if(challenge)await sendLoginEmail(env,{email:account.email,...challenge},env.ONBOARDING_ORIGIN);
+ }catch{console.error('Customer login delivery task failed');}
+ })());
  return accepted();
  }catch{return reply({error:'Sign-in unavailable'},503);}
 }
