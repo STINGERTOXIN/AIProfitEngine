@@ -1,3 +1,4 @@
+import {inviteApprovedCustomer} from '../../../lib/onboarding-invite.mjs';
 // Private subscriber API. Cloudflare Access must protect /api/admin/* at the edge.
 // Independently verify the Access JWT before reading D1. Disabled until the
 // administrator explicitly enables it after confirming edge protection.
@@ -230,7 +231,10 @@ export async function onRequestPost({request, env}) {
         email = {sent:false,reason:'Email notification could not be sent.'};
       }
     }
-    return reply({ok:true,id,status,email,requestId});
+    const onboarding = status === 'approved'
+      ? await inviteApprovedCustomer(env,id,new URL(request.url).origin)
+      : {sent:false,reason:'not_approved'};
+    return reply({ok:true,id,status,email,requestId,onboarding});
   } catch (error) {
     console.error('Application status update failed:', String(error));
     return reply({error:'Unable to update application.'}, 503);
