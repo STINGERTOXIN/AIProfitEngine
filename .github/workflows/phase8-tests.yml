@@ -1,0 +1,23 @@
+name: APE Phase 8 Tests
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          find lib functions workers -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -r -n1 node --check
+          node --check customer-portal-client.js
+          node --check customer-sign-in-client.js
+      - name: Unit tests
+        run: node --test tests/onboarding-token.test.mjs tests/onboarding-mail.test.mjs tests/customer-login-mail.test.mjs
