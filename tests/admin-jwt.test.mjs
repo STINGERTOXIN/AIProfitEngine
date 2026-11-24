@@ -1,12 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { webcrypto, generateKeyPairSync, sign } from 'node:crypto';
 
 // Import the actual Pages Function as an ES module, without changing package settings.
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
-const source = await readFile(new URL('../functions/api/admin/subscribers.js', import.meta.url), 'utf8');
-const { onRequestGet, onRequestPost } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { onRequestGet, onRequestPost } = await import('../functions/api/admin/subscribers.js');
 const domain = 'test-team.cloudflareaccess.com';
 const env = {
   ADMIN_SUBSCRIBERS_ENABLED: 'true',
