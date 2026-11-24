@@ -163,6 +163,17 @@ export async function onRequestPost({request, env}) {
       return reply({error:'Invalid application or status.'}, 400);
     // Fail closed until the audit migration is applied and explicitly enabled.
     // Do not permit unaudited application decisions during rollout.
+    // Temporary authenticated runtime diagnostic; never log raw values or credentials.
+    const auditFlag = env.ADMIN_REVIEW_AUDIT_ENABLED;
+    console.info('APE_REVIEW_AUDIT_RUNTIME', JSON.stringify({
+      present: auditFlag !== undefined && auditFlag !== null,
+      type: typeof auditFlag,
+      exactMatch: auditFlag === 'true',
+      trimmedMatch: typeof auditFlag === 'string' && auditFlag.trim() === 'true',
+      booleanTrue: auditFlag === true,
+      businessDbPresent: !!env.BUSINESS_DB,
+      businessDbBatchAvailable: typeof env.BUSINESS_DB?.batch === 'function'
+    }));
     if (env.ADMIN_REVIEW_AUDIT_ENABLED !== 'true')
       return reply({error:'Application review temporarily unavailable pending audit verification.'}, 503);
     // D1 batch executes on one SQLite connection in a transaction. The second
