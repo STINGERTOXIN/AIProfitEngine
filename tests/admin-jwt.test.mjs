@@ -281,7 +281,7 @@ test('isolated approval and rejection transitions update only pending records wi
         return { bind(status, id) { return { sql, status, id }; } };
       }
       if (sql.startsWith('INSERT INTO ape_application_review_events')) {
-        return { bind(id, actor, status) { return { sql, id, actor, status }; } };
+        return { bind(id, actor, status, requestId) { return { sql, id, actor, status, requestId }; } };
       }
       throw Error('Unexpected query in isolated review test: ' + sql);
     },
@@ -296,7 +296,7 @@ test('isolated approval and rejection transitions update only pending records wi
       }
       row.status = update.status;
       updates.push({ id: update.id, status: update.status });
-      auditEvents.push({ id: audit.id, status: audit.status, actor: audit.actor });
+      auditEvents.push({ id: audit.id, status: audit.status, actor: audit.actor, requestId: audit.requestId });
       return [{ meta: { changes: 1 } }, { meta: { changes: 1 } }];
     }
   };
@@ -335,6 +335,12 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(rejected.body.ok, true);
     assert.equal(rejected.body.status, 'rejected');
     assert.equal(rejected.body.email.sent, false);
+    for (const event of auditEvents) {
+      assert.match(event.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    }
+    assert.equal(approved.body.requestId, auditEvents[0].requestId);
+    assert.equal(rejected.body.requestId, auditEvents[1].requestId);
+    assert.notEqual(approved.body.requestId, rejected.body.requestId);
     for (const [id, status] of [[101, 'rejected'], [102, 'approved'], [999, 'approved']]) {
       const result = await submit(id, status);
       assert.equal(result.status, 409);
