@@ -121,7 +121,7 @@ test('valid signed Access JWT permits read-only dashboard queries', async () => 
       request: new Request('https://preview.example.invalid/api/admin/subscribers', {
         headers: { 'Cf-Access-Jwt-Assertion': jwt() }
       }),
-      env: { ...env, DB: fakeDB, BUSINESS_DB: fakeDB }
+      env: { ...env, DB: fakeDB }
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
@@ -281,7 +281,7 @@ test('isolated approval and rejection transitions update only pending records wi
         return { bind(status, id) { return { sql, status, id }; } };
       }
       if (sql.startsWith('INSERT INTO ape_application_review_events')) {
-        return { bind(id, actor, status) { return { sql, id, actor, status }; } };
+        return { bind(id, actor, status, requestId) { return { sql, id, actor, status, requestId }; } };
       }
       throw Error('Unexpected query in isolated review test: ' + sql);
     },
@@ -296,7 +296,7 @@ test('isolated approval and rejection transitions update only pending records wi
       }
       row.status = update.status;
       updates.push({ id: update.id, status: update.status });
-      auditEvents.push({ id: audit.id, status: audit.status, actor: audit.actor });
+      auditEvents.push({ id: audit.id, status: audit.status, actor: audit.actor, requestId: audit.requestId });
       return [{ meta: { changes: 1 } }, { meta: { changes: 1 } }];
     }
   };
@@ -308,7 +308,7 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(url, 'https://' + domain + '/cdn-cgi/access/certs');
     return Response.json({ keys: [jwk] });
   };
-  const isolatedEnv = { ...env, BUSINESS_DB: fakeDB, ADMIN_REVIEW_AUDIT_ENABLED: 'true', RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
+  const isolatedEnv = { ...env, DB: fakeDB, ADMIN_REVIEW_AUDIT_ENABLED: 'true', RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
   async function submit(id, status) {
     const response = await onRequestPost({
       request: new Request('https://preview.example.invalid/api/admin/subscribers', {
@@ -335,6 +335,12 @@ test('isolated approval and rejection transitions update only pending records wi
     assert.equal(rejected.body.ok, true);
     assert.equal(rejected.body.status, 'rejected');
     assert.equal(rejected.body.email.sent, false);
+    for (const event of auditEvents) {
+      assert.match(event.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    }
+    assert.equal(approved.body.requestId, auditEvents[0].requestId);
+    assert.equal(rejected.body.requestId, auditEvents[1].requestId);
+    assert.notEqual(approved.body.requestId, rejected.body.requestId);
     for (const [id, status] of [[101, 'rejected'], [102, 'approved'], [999, 'approved']]) {
       const result = await submit(id, status);
       assert.equal(result.status, 409);
