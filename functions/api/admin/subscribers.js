@@ -180,18 +180,20 @@ export async function onRequestPost({request, env}) {
     // statement observes changes() from the conditional UPDATE, so it writes
     // an audit event only for a successful pending-to-final transition.
     // An INSERT error rolls the entire batch back, including the UPDATE.
+    const requestId = crypto.randomUUID();
     const [transition, audit] = await env.DB.batch([
       env.DB.prepare(
         "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
       ).bind(status, id),
       env.DB.prepare(
-        "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status) SELECT ?, ?, 'pending', ? WHERE changes() = 1"
-      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status)
+        "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status, request_id) SELECT ?, ?, 'pending', ?, ? WHERE changes() = 1"
+      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status, requestId)
     ]);
     if (transition.meta?.changes !== 1)
       return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
     if (audit.meta?.changes !== 1)
       throw Error('Audit event was not recorded; review transaction cannot be confirmed.');
+    console.info('APE_REVIEW_COMMITTED', JSON.stringify({requestId, applicationId: id, status}));
     // Send a transactional decision notice only after the database update succeeds.
     // Email delivery requires a verified Resend sender configured as RESEND_FROM_EMAIL.
     let email = {sent:false, reason:'Email notification is not configured.'};
@@ -228,7 +230,7 @@ export async function onRequestPost({request, env}) {
         email = {sent:false,reason:'Email notification could not be sent.'};
       }
     }
-    return reply({ok:true,id,status,email});
+    return reply({ok:true,id,status,email,requestId});
   } catch (error) {
     console.error('Application status update failed:', String(error));
     return reply({error:'Unable to update application.'}, 503);
