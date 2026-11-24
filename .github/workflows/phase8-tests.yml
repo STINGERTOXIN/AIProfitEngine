@@ -20,4 +20,4 @@ jobs:
           node --check customer-portal-client.js
           node --check customer-sign-in-client.js
       - name: Unit tests
-        run: node --test tests/onboarding-token.test.mjs tests/onboarding-mail.test.mjs tests/customer-login-mail.test.mjs
+        run: node --test tests/onboarding-token.test.mjs tests/onboarding-mail.test.mjs tests/customer-login-mail.test.mjs tests/customer-sessions.test.mjs
