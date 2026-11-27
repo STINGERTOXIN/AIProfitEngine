@@ -113,6 +113,18 @@ export async function onRequestGet({request, env}) {
   try {
     if (!await authorized(request, env))
       return reply({error:'Administrator authentication required.'}, 403);
+    // Temporary, read-only diagnostic. Requires the same verified administrator JWT
+    // as the subscriber API. Never disclose the configured value or any secrets.
+    if (new URL(request.url).searchParams.get('audit_diagnostic') === '1') {
+      const flag = env.ADMIN_REVIEW_AUDIT_ENABLED;
+      const state = flag === undefined ? 'missing'
+        : flag === 'true' ? 'enabled'
+        : typeof flag !== 'string' ? 'unexpected_type'
+        : flag.trim() === 'true' ? 'whitespace'
+        : flag.toLowerCase() === 'true' ? 'case_mismatch'
+        : 'disabled_or_other';
+      return reply({auditFlagState: state, auditDatabaseBound: Boolean(env.BUSINESS_DB)});
+    }
     const [totals, recent, applications] = await Promise.all([
       env.DB.prepare(`SELECT COUNT(*) AS total,
         SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS last7,
