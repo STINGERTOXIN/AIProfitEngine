@@ -1,3 +1,4 @@
+import {inviteApprovedCustomer} from '../../../lib/onboarding-invite.mjs';
 // Private subscriber API. Cloudflare Access must protect /api/admin/* at the edge.
 // Independently verify the Access JWT before reading D1. Disabled until the
 // administrator explicitly enables it after confirming edge protection.
@@ -181,13 +182,15 @@ export async function onRequestPost({request, env}) {
     // an audit event only for a successful pending-to-final transition.
     // An INSERT error rolls the entire batch back, including the UPDATE.
     const requestId = crypto.randomUUID();
+    const queueEnabled = status === 'approved' && env.INVITATION_RECOVERY_ENABLED === 'true' && env.ONBOARDING_ENABLED === 'true' && env.AUTO_INVITATIONS_ENABLED === 'true' && origin === 'https://aiprofitengine.ai' && env.ONBOARDING_ORIGIN === origin;
     const [transition, audit] = await env.DB.batch([
       env.DB.prepare(
         "UPDATE ape_businesses SET status = ? WHERE id = ? AND status = 'pending'"
       ).bind(status, id),
       env.DB.prepare(
         "INSERT INTO ape_application_review_events (application_id, actor_email, old_status, new_status, request_id) SELECT ?, ?, 'pending', ?, ? WHERE changes() = 1"
-      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status, requestId)
+      ).bind(id, String(env.ADMIN_EMAIL).trim().toLowerCase(), status, requestId),
+      ...(queueEnabled ? [env.DB.prepare("INSERT INTO ape_invitation_delivery_jobs(application_id) SELECT ? WHERE changes() = 1 ON CONFLICT(application_id) DO NOTHING").bind(id)] : [])
     ]);
     if (transition.meta?.changes !== 1)
       return reply({error:'Application is no longer pending or does not exist. Refresh to see its status.'}, 409);
@@ -230,7 +233,10 @@ export async function onRequestPost({request, env}) {
         email = {sent:false,reason:'Email notification could not be sent.'};
       }
     }
-    return reply({ok:true,id,status,email,requestId});
+    const onboarding = status === 'approved'
+      ? (queueEnabled ? {sent:false,queued:true,reason:'queued'} : await inviteApprovedCustomer(env,id,new URL(request.url).origin))
+      : {sent:false,reason:'not_approved'};
+    return reply({ok:true,id,status,email,requestId,onboarding});
   } catch (error) {
     console.error('Application status update failed:', String(error));
     return reply({error:'Unable to update application.'}, 503);

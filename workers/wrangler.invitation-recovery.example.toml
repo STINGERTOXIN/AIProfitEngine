@@ -1,0 +1,22 @@
+# Copy to a deployment-specific configuration after isolated testing.
+name = "ape-invitation-recovery"
+main = "invitation-recovery.mjs"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+INVITATION_RECOVERY_ENABLED = "false"
+ONBOARDING_ENABLED = "false"
+AUTO_INVITATIONS_ENABLED = "false"
+ONBOARDING_ORIGIN = "https://aiprofitengine.ai"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_WITH_VERIFIED_DATABASE_NAME"
+database_id = "REPLACE_WITH_VERIFIED_DATABASE_ID"
+# Set RESEND_API_KEY as a Worker secret, never in this file.
+# Configure RESEND_FROM_EMAIL separately.
